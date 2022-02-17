@@ -21,6 +21,9 @@ var (
 	defaultIgnorePatterns = []string{
 		// Version control
 		"**/.git/**",
+		"**/.hg/**",
+		"**/.svn/**",
+		"**/CVS/**",
 		// Build artifacts
 		"**/node_modules/**",
 		"**/bazel-*/**",
@@ -85,20 +88,20 @@ type Config struct {
 	// the current working directory from which the command is invoked.
 	// Directories are watched recursively.
 	// TODO(bduffany): Accept glob patterns here.
-	Paths []string `json:"watch,omitEmpty"`
+	Paths []string `json:"watch,omitempty"`
 	// Only specifies a list of allowed patterns. If non-empty, at least one
 	// pattern must match in order for the command to be executed.
-	Only []string `json:"only,omitEmpty"`
+	Only []string `json:"only,omitempty"`
 	// Ignore specifies a list of paths to be ignored. Glob patterns are supported.
-	Ignore []string `json:"ignore,omitEmpty"`
+	Ignore []string `json:"ignore,omitempty"`
 
 	// UseDefaultIgnoreList specifies whether to use the default list of
 	// ignore patterns. These will be appended to the list of ignore patterns.
 	// Defaults to true.
-	UseDefaultIgnoreList *bool `json:"useDefaultIgnoreList,omitEmpty"`
+	UseDefaultIgnoreList *bool `json:"useDefaultIgnoreList,omitempty"`
 	// RestartSignal is the signal used to restart the command. Defaults to
 	// "SIGINT" (Ctrl+C).
-	RestartSignal *string `json:"restartSignal,omitEmpty"`
+	RestartSignal *string `json:"restartSignal,omitempty"`
 
 	// TODO: follow_symlinks
 }
@@ -133,28 +136,27 @@ func parseConfig() (*Config, error) {
 	cfg := &Config{}
 
 	args := os.Args[1:]
-	exec := []string{}
+	cmdArgs := []string{}
 	paths := []string{}
 	ignore := []string{}
 	only := []string{}
-	gotArgSeparator := false
+	isParsingCommand := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if gotArgSeparator {
-			exec = append(exec, arg)
-			continue
-		}
-		if arg == "--" {
-			gotArgSeparator = true
+		if isParsingCommand {
+			cmdArgs = append(cmdArgs, arg)
 			continue
 		}
 
+		// Parse string slice flags
+		// TODO: Simplify this flag parsing
 		for _, spec := range []struct {
 			Short, Long string
 			Dest        *[]string
 		}{
-			{"-i", "--ignore", &ignore},
+			{"-w", "--watch", &paths},
 			{"-o", "--only", &only},
+			{"-i", "--ignore", &ignore},
 		} {
 			for _, name := range []string{spec.Short, spec.Long} {
 				if arg == name {
@@ -171,17 +173,23 @@ func parseConfig() (*Config, error) {
 			}
 		}
 
-		paths = append(paths, arg)
+		cmdArgs = append(cmdArgs, arg)
+		isParsingCommand = true
 
-		// TODO: Parse -c,--config and merge config
+		// TODO: Parse -c,--config and merge config file
 	nextarg:
 	}
 
-	cfg.Exec = exec
+	cfg.Exec = cmdArgs
 	cfg.Ignore = ignore
 	cfg.Only = only
-	cfg.Paths = paths
+	if cfg.Paths != nil && len(cfg.Paths) == 0 {
+		return nil, fmt.Errorf("watch list in config is empty")
+	}
 	if cfg.Paths == nil {
+		cfg.Paths = paths
+	}
+	if len(cfg.Paths) == 0 {
 		cfg.Paths = []string{"."}
 	}
 	if cfg.UseDefaultIgnoreList == nil {
@@ -189,7 +197,7 @@ func parseConfig() (*Config, error) {
 		cfg.UseDefaultIgnoreList = &val
 	}
 	if len(cfg.Exec) == 0 {
-		return nil, fmt.Errorf("Missing command to run.")
+		return nil, fmt.Errorf("command not specified")
 	}
 	return cfg, nil
 }
@@ -348,7 +356,7 @@ func main() {
 		for {
 			select {
 			case <-restart:
-				notifyf("Restarting command")
+				notifyf("Restarting due to changes")
 				cmd.Process.Signal(syscall.SIGINT)
 				if err := cmd.Wait(); err != nil {
 					warnf("%s", err)
