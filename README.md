@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://user-images.githubusercontent.com/2414826/154606331-751abc5a-2c92-40d0-bc89-bd772397a14f.png" alt="Golang gopher mascot with little horns" />
+</p>
+
 # godemon
 
 godemon lets you restart a command when files change. It is useful for
