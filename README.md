@@ -24,7 +24,7 @@ go install github.com/bduffany/godemon@latest
 
 ## Basic usage
 
-The `godemon` CLI is used in the following way:
+The `godemon` command can be used as follows:
 
 ```
 godemon [options ...] <command> [args ...]
