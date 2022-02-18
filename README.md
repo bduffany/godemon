@@ -13,6 +13,9 @@ files.
 
 Like [nodemon](https://github.com/remy/nodemon), but written in Go.
 
+**STATUS: WIP**. Signal handling, child process management, etc. is not quite
+battle-tested and may have some bugs.
+
 ## Install
 
 ```bash
