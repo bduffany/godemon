@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,10 +33,7 @@ var (
 		"**/*.swp",
 		"**/*.swx",
 	}
-)
 
-const (
-	// TODO: Configure via flag
 	verbose = false
 )
 
@@ -75,20 +73,20 @@ func fatalf(format string, args ...interface{}) {
 }
 
 type Config struct {
-	// Exec is the command and arguments to be executed upon any change.
+	// Command is the command and arguments to be executed upon any change.
 	//
 	// The command is not interpreted using a shell. If you would like shell
 	// features such as environment variable expansion, specify the command
 	// using something like the following:
 	//
 	//     ["sh", "-c", "$YOUR_COMMAND"]
-	Exec []string `json:"exec"`
+	Command []string `json:"command"`
 
-	// Paths specifies a list of files or directories to be watched. Defaults to
+	// Watch specifies a list of files or directories to be watched. Defaults to
 	// the current working directory from which the command is invoked.
 	// Directories are watched recursively.
 	// TODO(bduffany): Accept glob patterns here.
-	Paths []string `json:"watch,omitempty"`
+	Watch []string `json:"watch,omitempty"`
 	// Only specifies a list of allowed patterns. If non-empty, at least one
 	// pattern must match in order for the command to be executed.
 	Only []string `json:"only,omitempty"`
@@ -99,9 +97,11 @@ type Config struct {
 	// ignore patterns. These will be appended to the list of ignore patterns.
 	// Defaults to true.
 	UseDefaultIgnoreList *bool `json:"useDefaultIgnoreList,omitempty"`
-	// RestartSignal is the signal used to restart the command. Defaults to
-	// "SIGINT" (Ctrl+C).
-	RestartSignal *string `json:"restartSignal,omitempty"`
+	// NotifySignal is the signal used to notify the command of file changes.
+	// Defaults to "SIGINT" (Ctrl+C), which should gracefully stop most
+	// well-behaved commands.
+	NotifySignal *string `json:"notifySignal,omitempty"`
+	notifySignal syscall.Signal
 
 	// TODO: follow_symlinks
 }
@@ -118,7 +118,11 @@ func isDir(path string) bool {
 	return s.IsDir()
 }
 
-func parseRestartSignal(name string) (syscall.Signal, error) {
+func parseSignal(name string) (syscall.Signal, error) {
+	n, err := strconv.Atoi(name)
+	if err == nil {
+		return syscall.Signal(n), nil
+	}
 	switch strings.TrimPrefix(strings.ToUpper(name), "SIG") {
 	case "INT":
 		return syscall.SIGINT, nil
@@ -132,20 +136,75 @@ func parseRestartSignal(name string) (syscall.Signal, error) {
 	return 0, fmt.Errorf("Unsupported signal %q", name)
 }
 
+func printUsage() {
+	fmt.Print(`
+godemon: run a command and restart on changes to files/directories.
+
+Usage:
+  godemon [options...] <command> [args...]
+
+Basic options:
+  -w, --watch          set files or dirs to watch (default ".")
+  -o, --only           only restart when changed paths match these patterns
+  -i, --ignore         do not restart if changed paths match these patterns
+
+Advanced options:
+  --no-default-ignore  disable the default ignore list (.git, node_modules, etc.)
+  -s, --signal         restart signal name or number (default SIGINT)
+`)
+}
+
 func parseConfig() (*Config, error) {
 	cfg := &Config{}
 
 	args := os.Args[1:]
+
+	if len(args) == 1 && args[0] == "help" {
+		printUsage()
+		os.Exit(1)
+	}
+
 	cmdArgs := []string{}
 	paths := []string{}
 	ignore := []string{}
 	only := []string{}
 	isParsingCommand := false
+	noDefaultIgnore := false
+	signal := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if isParsingCommand {
 			cmdArgs = append(cmdArgs, arg)
 			continue
+		}
+
+		if arg == "-h" || arg == "--help" {
+			printUsage()
+			os.Exit(1)
+		}
+
+		// TODO: more flexible bool parsing
+		if arg == "--no-default-ignore" {
+			noDefaultIgnore = true
+			continue
+		}
+		if arg == "-v" || arg == "--verbose" {
+			verbose = true
+			continue
+		}
+
+		for _, name := range []string{"-s", "--signal"} {
+			if arg == name {
+				i++
+				arg = args[i]
+				signal = arg
+				goto nextarg
+			}
+			if strings.HasPrefix(arg, name+"=") {
+				arg = strings.TrimPrefix(arg, name+"=")
+				signal = arg
+				goto nextarg
+			}
 		}
 
 		// Parse string slice flags
@@ -173,6 +232,10 @@ func parseConfig() (*Config, error) {
 			}
 		}
 
+		if strings.HasPrefix(arg, "-") {
+			return nil, fmt.Errorf("unrecognized option %q", arg)
+		}
+
 		cmdArgs = append(cmdArgs, arg)
 		isParsingCommand = true
 
@@ -180,24 +243,40 @@ func parseConfig() (*Config, error) {
 	nextarg:
 	}
 
-	cfg.Exec = cmdArgs
+	cfg.Command = cmdArgs
 	cfg.Ignore = ignore
 	cfg.Only = only
-	if cfg.Paths != nil && len(cfg.Paths) == 0 {
+	if cfg.Watch != nil && len(cfg.Watch) == 0 {
 		return nil, fmt.Errorf("watch list in config is empty")
 	}
-	if cfg.Paths == nil {
-		cfg.Paths = paths
+	if cfg.Watch == nil {
+		cfg.Watch = paths
 	}
-	if len(cfg.Paths) == 0 {
-		cfg.Paths = []string{"."}
+	if len(cfg.Watch) == 0 {
+		cfg.Watch = []string{"."}
 	}
 	if cfg.UseDefaultIgnoreList == nil {
 		val := true
 		cfg.UseDefaultIgnoreList = &val
 	}
-	if len(cfg.Exec) == 0 {
-		return nil, fmt.Errorf("command not specified")
+	if signal != "" {
+		cfg.NotifySignal = &signal
+	}
+	if cfg.NotifySignal == nil {
+		cfg.notifySignal = syscall.SIGINT
+	} else {
+		s, err := parseSignal(*cfg.NotifySignal)
+		if err != nil {
+			return nil, err
+		}
+		cfg.notifySignal = s
+	}
+	if noDefaultIgnore {
+		val := false
+		cfg.UseDefaultIgnoreList = &val
+	}
+	if len(cfg.Command) == 0 {
+		return nil, fmt.Errorf("must specify a command to run")
 	}
 	return cfg, nil
 }
@@ -248,7 +327,9 @@ func throttleRestarts(events chan struct{}) chan struct{} {
 func main() {
 	cfg, err := parseConfig()
 	if err != nil {
-		fatalf("%s", err)
+		fmt.Printf("%s: %s\n", os.Args[0], err)
+		fmt.Println("Try \"godemon --help\" for more information.")
+		os.Exit(1)
 	}
 
 	w, err := fsnotify.NewWatcher()
@@ -324,7 +405,7 @@ func main() {
 		}()
 	}
 
-	for _, path := range cfg.Paths {
+	for _, path := range cfg.Watch {
 		abs, err := filepath.Abs(path)
 		if err != nil {
 			fatalf("%s", err)
@@ -342,7 +423,7 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
 	newCommand := func() *exec.Cmd {
-		cmd := exec.Command(cfg.Exec[0], cfg.Exec[1:]...)
+		cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd
@@ -357,7 +438,7 @@ func main() {
 			select {
 			case <-restart:
 				notifyf("Restarting due to changes")
-				cmd.Process.Signal(syscall.SIGINT)
+				cmd.Process.Signal(cfg.notifySignal)
 				if err := cmd.Wait(); err != nil {
 					warnf("%s", err)
 				}
@@ -366,10 +447,9 @@ func main() {
 					fatalf("Could not start command: %s", err)
 				}
 			case s := <-sig:
-				// Forward signal to command
-				// TODO: Escalate 3X SIGINT to SIGTERM, with
-				// behavior optionally disabled by config?
-				infof("Got SIGINT, forwarding to child process")
+				// TODO: Escalate multiple SIGINT to SIGTERM then SIGKILL,
+				// with this behavior optionally disabled by config?
+				infof("Got SIGINT, forwarding to command")
 				cmd.Process.Signal(s)
 				cmd.Wait()
 				os.Exit(1)

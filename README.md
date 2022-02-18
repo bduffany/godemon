@@ -1,5 +1,9 @@
 # godemon
 
+godemon lets you restart a command when files change. It is useful for
+things like automatically rebuilding your application when you edit source
+files.
+
 Like [nodemon](https://github.com/remy/nodemon), but written in Go.
 
 ## Install
@@ -21,29 +25,31 @@ directory changes.
 
 ## Examples
 
-To watch the current directory (recursively) and run a command on any change:
+To watch the current directory (recursively) and run a command on any
+change:
 
 ```bash
-godemon echo 'Something changed in ./'
+godemon command
 ```
 
-To watch multiple directories, use `--watch` or `-w`. When using `--watch`,
-the current directory needs to be passed explicitly:
+To watch multiple directories, use `--watch` or `-w`. When using this
+flag, the current directory needs to be passed explicitly:
 
 ```bash
-godemon --watch . --watch /some/other/dir echo 'Watching ./ or in /some/other/dir'
+godemon --watch . --watch /some/other/dir command
 ```
 
-To only restart when certain files patterns change, use `--only` or `-o`:
+To only restart on changes to certain paths or patterns, use `--only` or
+`-o`:
 
 ```bash
-godemon --only '**/*.ts' --only '**/*.tsx' echo 'Watching ts/tsx files in ./'
+godemon --only '**/*.ts' --only '**/*.tsx' command
 ```
 
-To ignore certain directories, use `--ignore` or `-i`:
+To ignore changes to certain paths or patterns, use `--ignore` or `-i`:
 
 ```bash
-godemon --ignore '**/server/**' echo 'Something changed, but not in the /server/ dir'
+godemon --ignore '**/build/**' --ignore '**/dist/**' command
 ```
 
 ## Default ignored dirs
@@ -61,3 +67,5 @@ The default ignored patterns are:
 **/CVS/**
 **/node_modules/**
 ```
+
+To disable the default ignore list, pass `--no-default-ignore`.
