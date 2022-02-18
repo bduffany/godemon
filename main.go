@@ -1,7 +1,6 @@
 package main
 
 import (
-	// "encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
-	// "github.com/sabhiram/go-gitignore"
 )
 
 var (
