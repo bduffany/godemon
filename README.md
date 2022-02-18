@@ -62,7 +62,7 @@ To ignore changes to certain paths or patterns, use `--ignore` or `-i`:
 godemon --ignore '**/build/**' --ignore '**/dist/**' command
 ```
 
-## Default ignored dirs
+## Default ignored patterns
 
 The default ignored patterns are:
 
