@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,17 +32,27 @@ var (
 		"**/*.swx",
 	}
 
-	verbose = false
+	logLevels = map[string]int{
+		"DEBUG":   0,
+		"INFO":    1,
+		"NOTIFY":  2,
+		"WARNING": 3,
+		"ERROR":   4,
+		"FATAL":   5,
+	}
+	logLevel = logLevels["NOTIFY"]
 )
 
 func logf(level, format string, args ...interface{}) {
-	if !verbose && (level == "DEBUG" || level == "INFO") {
+	if logLevels[level] < logLevel {
 		return
 	}
 	const gray = "\x1b[90m"
 	const reset = "\x1b[0m"
 	prefix := "[godemon] "
-	if level != "" {
+	// Don't show NOTIFY prefix since these are very common and are intended
+	// to be user friendly.
+	if level != "NOTIFY" {
 		prefix += level + ": "
 	}
 	fmt.Printf(gray+prefix+format+reset+"\n", args...)
@@ -58,7 +68,7 @@ func infof(format string, args ...interface{}) {
 	logf("INFO", format, args...)
 }
 func notifyf(format string, args ...interface{}) {
-	logf("", format, args...)
+	logf("NOTIFY", format, args...)
 }
 func warnf(format string, args ...interface{}) {
 	logf("WARNING", format, args...)
@@ -101,7 +111,7 @@ type Config struct {
 	NotifySignal *string `json:"notifySignal,omitempty"`
 	notifySignal syscall.Signal
 
-	// TODO: follow_symlinks
+	// TODO: FollowSymlinks
 }
 
 func isDir(path string) bool {
@@ -147,8 +157,9 @@ Basic options:
   -i, --ignore         do not restart if changed paths match these patterns
 
 Advanced options:
-  --no-default-ignore  disable the default ignore list (.git, node_modules, etc.)
+  --no-default-ignore  disable the default ignore list (.git, etc.)
   -s, --signal         restart signal name or number (default SIGINT)
+  -v, --verbose        log more info; set twice to log lower level debug info
 `)
 }
 
@@ -187,7 +198,7 @@ func parseConfig() (*Config, error) {
 			continue
 		}
 		if arg == "-v" || arg == "--verbose" {
-			verbose = true
+			logLevel--
 			continue
 		}
 
@@ -257,6 +268,9 @@ func parseConfig() (*Config, error) {
 		val := true
 		cfg.UseDefaultIgnoreList = &val
 	}
+	if *cfg.UseDefaultIgnoreList {
+		cfg.Ignore = append(cfg.Ignore, defaultIgnorePatterns...)
+	}
 	if signal != "" {
 		cfg.NotifySignal = &signal
 	}
@@ -279,7 +293,7 @@ func parseConfig() (*Config, error) {
 	return cfg, nil
 }
 
-func drain(ch chan struct{}) int {
+func nonBlockingDrain(ch <-chan struct{}) int {
 	n := 0
 	for {
 		select {
@@ -291,9 +305,8 @@ func drain(ch chan struct{}) int {
 	}
 }
 
-func throttleRestarts(events chan struct{}) chan struct{} {
-	// Latch: buf size of one, and sender only does non-blocking sends.
-	restart := make(chan struct{}, 1)
+func throttleRestarts(events <-chan struct{}) chan struct{} {
+	restart := make(chan struct{})
 	go func() {
 		defer close(restart)
 
@@ -303,7 +316,8 @@ func throttleRestarts(events chan struct{}) chan struct{} {
 			if !ok {
 				return
 			}
-			// Restart immediately
+			// Restart immediately. The send here is non-blocking, so the receiver
+			// will ignore restart attempts while it is already mid-restart.
 			select {
 			case restart <- struct{}{}:
 			default:
@@ -312,7 +326,7 @@ func throttleRestarts(events chan struct{}) chan struct{} {
 			// TODO: Make this configurable, and/or adaptive
 			for {
 				<-time.After(25 * time.Millisecond)
-				n := drain(events)
+				n := nonBlockingDrain(events)
 				if n == 0 {
 					break
 				}
@@ -322,62 +336,184 @@ func throttleRestarts(events chan struct{}) chan struct{} {
 	return restart
 }
 
-func main() {
-	cfg, err := parseConfig()
-	if err != nil {
-		fmt.Printf("%s: %s\n", os.Args[0], err)
-		fmt.Println("Try \"godemon --help\" for more information.")
-		os.Exit(1)
+type godemon struct {
+	cfg *Config
+	w   *fsnotify.Watcher
+}
+
+func (g *godemon) loopCommand(restart <-chan struct{}, onShutdown chan<- struct{}) {
+	// Small buffer in case we get signals before the command starts.
+	sig := make(chan os.Signal, 4)
+	signal.Notify(sig)
+
+	newCommand := func() *exec.Cmd {
+		cmd := exec.Command(g.cfg.Command[0], g.cfg.Command[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd
 	}
 
+	cmd := newCommand()
+	if err := cmd.Start(); err != nil {
+		fatalf("Could not start command: %s", err)
+	}
+	nShutdownAttempts := 0
+	var mu sync.Mutex
+
+	// Signal handler
+	go func() {
+		for s := range sig {
+			if s == syscall.SIGIO {
+				debugf("Skipping signal %d %q", s, s)
+				continue
+			}
+			s := s
+			isShutdown := false
+			mu.Lock()
+			cmd := cmd
+			if s == syscall.SIGINT || s == syscall.SIGTERM || s == syscall.SIGQUIT {
+				isShutdown = true
+				nShutdownAttempts++
+			}
+			n := nShutdownAttempts
+			mu.Unlock()
+
+			if isShutdown {
+				select {
+				case onShutdown <- struct{}{}:
+				default:
+				}
+			}
+
+			debugf("Forwarding signal %d %q", s, s)
+
+			// Forward the signal and wait for shutdown in the background so that we
+			// can quickly respond to subsequent signals.
+			go func() {
+				cmd.Process.Signal(s)
+
+				if isShutdown && n == 1 {
+					cmd.Wait()
+					infof("Command exited")
+					os.Exit(1)
+				}
+				if isShutdown && n == 2 {
+					notifyf("Command is still shutting down (Ctrl+C again to force)")
+					return
+				}
+				if isShutdown && n == 3 {
+					cmd.Process.Signal(syscall.SIGKILL)
+					os.Exit(1)
+				}
+			}()
+		}
+	}()
+
+	for range restart {
+		mu.Lock()
+		current := cmd
+		// If shutting down, ignore restart attempts and just wait
+		// for the program to be terminated.
+		if nShutdownAttempts > 0 {
+			mu.Unlock()
+			continue
+		}
+		mu.Unlock()
+
+		notifyf("Restarting due to changes")
+		current.Process.Signal(g.cfg.notifySignal)
+		if err := current.Wait(); err != nil {
+			errorf("%s", err)
+		}
+		debugf("Command shutdown successfully.")
+
+		next := newCommand()
+		if err := next.Start(); err != nil {
+			fatalf("Could not start command: %s", err)
+		}
+
+		mu.Lock()
+		cmd = next
+		mu.Unlock()
+	}
+}
+
+func (g *godemon) Start() error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer w.Close()
-
-	ignorePatterns := cfg.Ignore
-	if *cfg.UseDefaultIgnoreList {
-		ignorePatterns = append(ignorePatterns, defaultIgnorePatterns...)
-	}
-
-	shouldIgnore := func(path string) bool {
-		for _, pattern := range ignorePatterns {
-			match, err := doublestar.PathMatch(pattern, path)
-			if err != nil {
-				warnf("%s", err)
-				continue
-			}
-			if match {
-				return true
-			}
-		}
-		if len(cfg.Only) == 0 {
-			return false
-		}
-		for _, pattern := range cfg.Only {
-			match, err := doublestar.PathMatch(pattern, path)
-			if err != nil {
-				warnf("%s", err)
-				continue
-			}
-			if match {
-				return false
-			}
-		}
-		return true
-	}
+	defer func() {
+		w.Close()
+		select {} // Wait for shutdown to finish.
+	}()
+	g.w = w
 
 	addCh := make(chan string, 100_000)
+
+	go g.handleAdds(addCh)
+
+	for _, path := range g.cfg.Watch {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			fatalf("%s", err)
+		}
+		addCh <- abs
+	}
+
+	events := make(chan struct{}, 1024)
+	defer close(events)
+
+	onShutdown := make(chan struct{}, 1)
+
+	// Command worker
+	restart := throttleRestarts(events)
+
+	go g.loopCommand(restart, onShutdown)
+
+	// Wait for events and dispatch to the appropriate handler.
+	g.handleEvents(addCh, events, onShutdown)
+
+	return nil
+}
+
+func (g *godemon) shouldIgnore(path string) bool {
+	for _, pattern := range g.cfg.Ignore {
+		match, err := doublestar.PathMatch(pattern, path)
+		if err != nil {
+			warnf("%s", err)
+			continue
+		}
+		if match {
+			return true
+		}
+	}
+	if len(g.cfg.Only) == 0 {
+		return false
+	}
+	for _, pattern := range g.cfg.Only {
+		match, err := doublestar.PathMatch(pattern, path)
+		if err != nil {
+			warnf("%s", err)
+			continue
+		}
+		if match {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *godemon) handleAdds(addCh chan string) {
 	for i := 0; i < 16; i++ {
 		go func() {
 			for {
 				path := <-addCh
-				if shouldIgnore(path) {
+				if g.shouldIgnore(path) {
 					infof("Not watching ignored path %q", path)
 					continue
 				}
-				w.Add(path)
+				g.w.Add(path)
 				infof("Watching %q", path)
 
 				if !isDir(path) {
@@ -397,71 +533,21 @@ func main() {
 							warnf("Too many files being added at once; some paths may not be watched.")
 						}
 					}
-					// TODO: follow symlinks in the directory
+					// TODO: follow symlinks in the directory. Make sure to detect
+					// cycles
 				}
 			}
 		}()
 	}
+}
 
-	for _, path := range cfg.Watch {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			fatalf("%s", err)
-		}
-		addCh <- abs
-	}
-
-	events := make(chan struct{}, 1024)
-	defer close(events)
-
-	// Command worker
-	restart := throttleRestarts(events)
-	sig := make(chan os.Signal, 1)
-	// TODO: Consider forwarding all signals, not just these ones.
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	newCommand := func() *exec.Cmd {
-		cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd
-	}
-
-	go func() {
-		cmd := newCommand()
-		if err := cmd.Start(); err != nil {
-			fatalf("Could not start command: %s", err)
-		}
-		for {
-			select {
-			case <-restart:
-				notifyf("Restarting due to changes")
-				cmd.Process.Signal(cfg.notifySignal)
-				if err := cmd.Wait(); err != nil {
-					warnf("%s", err)
-				}
-				cmd = newCommand()
-				if err := cmd.Start(); err != nil {
-					fatalf("Could not start command: %s", err)
-				}
-			case s := <-sig:
-				// TODO: Escalate multiple SIGINT to SIGTERM then SIGKILL,
-				// with this behavior optionally disabled by config?
-				infof("Got SIGINT, forwarding to command")
-				cmd.Process.Signal(s)
-				cmd.Wait()
-				os.Exit(1)
-			}
-		}
-	}()
-
-	// Wait for events and dispatch to the appropriate handler.
+func (g *godemon) handleEvents(addCh chan string, eventsCh chan struct{}, onShutdown chan struct{}) {
 	for {
 		select {
-		case err := <-w.Errors:
+		case err := <-g.w.Errors:
 			warnf("%s", err)
-		case event := <-w.Events:
-			if shouldIgnore(event.Name) {
+		case event := <-g.w.Events:
+			if g.shouldIgnore(event.Name) {
 				infof("Ignoring event: %s %q", event.Op, event.Name)
 				continue
 			}
@@ -471,7 +557,23 @@ func main() {
 					addCh <- event.Name
 				}
 			}
-			events <- struct{}{}
+			eventsCh <- struct{}{}
+		case <-onShutdown:
+			return
 		}
+	}
+}
+
+func main() {
+	cfg, err := parseConfig()
+	if err != nil {
+		fmt.Printf("%s: %s\n", os.Args[0], err)
+		fmt.Println("Try \"godemon --help\" for more information.")
+		os.Exit(1)
+	}
+
+	g := &godemon{cfg: cfg}
+	if err := g.Start(); err != nil {
+		fatalf("%s", err)
 	}
 }
