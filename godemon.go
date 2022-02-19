@@ -107,6 +107,10 @@ type Config struct {
 	// ignore patterns. These will be appended to the list of ignore patterns.
 	// Defaults to true.
 	UseDefaultIgnoreList *bool `json:"useDefaultIgnoreList,omitempty"`
+	// UseGitignore specifies whether to respect .gitignore files when watching
+	// directories.
+	// Defaults to true.
+	UseGitignore *bool `json:"useGitignore,omitempty"`
 	// NotifySignal is the signal used to notify the command of file changes.
 	// Defaults to "SIGINT" (Ctrl+C), which should gracefully stop most
 	// well-behaved commands.
@@ -405,7 +409,7 @@ type godemon struct {
 	w   *fsnotify.Watcher
 }
 
-func (g *godemon) loopCommand(restart <-chan struct{}, onShutdown chan<- struct{}) {
+func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{}) {
 	// Small buffer in case we get signals before the command starts.
 	sig := make(chan os.Signal, 4)
 	signal.Notify(sig)
@@ -444,7 +448,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, onShutdown chan<- struct{
 
 			if isShutdown {
 				select {
-				case onShutdown <- struct{}{}:
+				case shutdownCh <- struct{}{}:
 				default:
 				}
 			}
@@ -547,15 +551,15 @@ func (g *godemon) Start() error {
 	events := make(chan struct{}, 1024)
 	defer close(events)
 
-	onShutdown := make(chan struct{}, 1)
+	shutdownCh := make(chan struct{}, 1)
 
 	// Command worker
 	restart := throttleRestarts(events)
 
-	go g.loopCommand(restart, onShutdown)
+	go g.loopCommand(restart, shutdownCh)
 
 	// Wait for events and dispatch to the appropriate handler.
-	g.handleEvents(addCh, events, onShutdown)
+	g.handleEvents(addCh, events, shutdownCh)
 
 	return nil
 }
@@ -682,7 +686,7 @@ func (g *godemon) handleAdds(addCh chan string) {
 	}
 }
 
-func (g *godemon) handleEvents(addCh chan string, eventsCh chan struct{}, onShutdown chan struct{}) {
+func (g *godemon) handleEvents(addCh chan<- string, restartCh chan<- struct{}, shutdownCh <-chan struct{}) {
 	for {
 		select {
 		case err := <-g.w.Errors:
@@ -693,13 +697,13 @@ func (g *godemon) handleEvents(addCh chan string, eventsCh chan struct{}, onShut
 				continue
 			}
 			infof("Got event: %s %q", event.Op, event.Name)
-			if event.Op == fsnotify.Create {
-				if isDir(event.Name) {
-					addCh <- event.Name
-				}
+			// When creating new dirs, add them to the watch list.
+			if event.Op == fsnotify.Create && isDir(event.Name) {
+				addCh <- event.Name
+			} else {
+				restartCh <- struct{}{}
 			}
-			eventsCh <- struct{}{}
-		case <-onShutdown:
+		case <-shutdownCh:
 			return
 		}
 	}

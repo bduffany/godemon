@@ -53,7 +53,7 @@ To only restart on changes to certain paths or patterns, use `--only` or
 `-o`:
 
 ```bash
-godemon --only '**/*.ts' --only '**/*.tsx' command
+godemon --only '*.ts' --only '*.tsx' command
 ```
 
 To ignore changes to certain paths or patterns, use `--ignore` or `-i`:
