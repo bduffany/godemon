@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
+	"github.com/mitchellh/go-ps"
 )
 
 var (
@@ -157,7 +159,7 @@ Basic options:
   -i, --ignore         do not restart if changed paths match these patterns
 
 Advanced options:
-  --no-default-ignore  disable the default ignore list (.git, etc.)
+  --no-default-ignore  disable the default ignore list (version control dirs, etc.)
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
 `)
@@ -252,6 +254,9 @@ func parseConfig() (*Config, error) {
 	nextarg:
 	}
 
+	// TODO: Validate glob patterns
+	// TODO: Convert all paths to use "/" as path separator
+
 	cfg.Command = cmdArgs
 	cfg.Ignore = ignore
 	cfg.Only = only
@@ -263,6 +268,14 @@ func parseConfig() (*Config, error) {
 	}
 	if len(cfg.Watch) == 0 {
 		cfg.Watch = []string{"."}
+	}
+	for i := range cfg.Watch {
+		cfg.Watch[i] = filepath.Clean(cfg.Watch[i])
+		abs, err := filepath.Abs(cfg.Watch[i])
+		if err != nil {
+			return nil, err
+		}
+		cfg.Watch[i] = abs
 	}
 	if cfg.UseDefaultIgnoreList == nil {
 		val := true
@@ -336,6 +349,57 @@ func throttleRestarts(events <-chan struct{}) chan struct{} {
 	return restart
 }
 
+var (
+	multipleSlashes = regexp.MustCompile(`/+`)
+)
+
+func pathJoin(paths ...string) string {
+	joined := strings.Join(paths, "/")
+	joined = multipleSlashes.ReplaceAllLiteralString(joined, "/")
+	return joined
+}
+
+func toAbsolutePattern(parent, pattern string) string {
+	// Paths starting with / are interpreted directly relative
+	// to the parent
+	if strings.HasPrefix(pattern, "/") {
+		return pathJoin(parent, pattern)
+	}
+	// Paths not starting with "/" are reinterpreted to be
+	// under any child dir, if not explicitly starting with **/
+	if !strings.HasPrefix(pattern, "**/") {
+		return pathJoin(parent, "**", pattern)
+	}
+	return pathJoin(parent, pattern)
+}
+
+func descendantPids(pid int) ([]int, error) {
+	processes, err := ps.Processes()
+	if err != nil {
+		return nil, err
+	}
+	ppid := make(map[int]int, len(processes))
+	for _, p := range processes {
+		ppid[p.Pid()] = p.PPid()
+	}
+	var childPids []int
+	for _, p := range processes {
+		cur := p.Pid()
+		for {
+			ppid, ok := ppid[cur]
+			if !ok {
+				break
+			}
+			cur = ppid
+			if cur == pid {
+				childPids = append(childPids, p.Pid())
+				break
+			}
+		}
+	}
+	return childPids, nil
+}
+
 type godemon struct {
 	cfg *Config
 	w   *fsnotify.Watcher
@@ -385,25 +449,43 @@ func (g *godemon) loopCommand(restart <-chan struct{}, onShutdown chan<- struct{
 				}
 			}
 
-			debugf("Forwarding signal %d %q", s, s)
+			// TODO: Test in non-Unix environments
+			if isShutdown && n == 3 {
+				debugf("Escalating to SIGKILL")
+				if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+					errorf("SIGKILL returned an error: %s", err)
+				}
+				cpids, err := descendantPids(cmd.Process.Pid)
+				if err != nil {
+					errorf("Failed to determine child pids: %s", err)
+				}
+				for _, cpid := range cpids {
+					if err := syscall.Kill(cpid, syscall.SIGKILL); err != nil {
+						errorf("Failed to SIGKILL child process: %s", err)
+					}
+				}
+				os.Exit(130)
+			}
 
 			// Forward the signal and wait for shutdown in the background so that we
 			// can quickly respond to subsequent signals.
 			go func() {
-				cmd.Process.Signal(s)
+				debugf("Forwarding signal %d %q", s, s)
+				if err := cmd.Process.Signal(s); err != nil {
+					debugf("SIGKILL itself returned an error: %s", err)
+				}
 
 				if isShutdown && n == 1 {
-					cmd.Wait()
-					infof("Command exited")
-					os.Exit(1)
+					if err := cmd.Wait(); err != nil {
+						debugf("Command exited with err (expected): %s", err)
+					} else {
+						debugf("Command exited")
+					}
+					os.Exit(130)
 				}
 				if isShutdown && n == 2 {
 					notifyf("Command is still shutting down (Ctrl+C again to force)")
 					return
-				}
-				if isShutdown && n == 3 {
-					cmd.Process.Signal(syscall.SIGKILL)
-					os.Exit(1)
 				}
 			}()
 		}
@@ -444,6 +526,7 @@ func (g *godemon) Start() error {
 		return err
 	}
 	defer func() {
+		debugf("Removing file watchers")
 		w.Close()
 		select {} // Wait for shutdown to finish.
 	}()
@@ -478,8 +561,35 @@ func (g *godemon) Start() error {
 }
 
 func (g *godemon) shouldIgnore(path string) bool {
+	// Determine which watched parent dir the path falls under.
+	// TODO: Handle overlapping watch paths.
+	// TODO: Handle file watch paths.
+	parent := ""
+	for _, w := range g.cfg.Watch {
+		// Never ignore explicitly watched paths.
+		// TODO: Consider allowing ignore patterns to act as override flags to
+		// prevent earlier explicitly watched paths from actually being watched.
+		if w == path {
+			return false
+		}
+		// TODO: Cache this syscall result?
+		if !isDir(w) {
+			continue
+		}
+		if w == path || strings.HasPrefix(path, w+"/") {
+			parent = w
+			break
+		}
+		debugf("Ruled out %q as parent watch path", w)
+	}
+	if parent == "" {
+		errorf("Could not determine parent watch path of %q", path)
+		return false
+	}
+	// If explicitly ignored, do not watch.
 	for _, pattern := range g.cfg.Ignore {
-		match, err := doublestar.PathMatch(pattern, path)
+		pattern = toAbsolutePattern(parent, pattern)
+		match, err := doublestar.Match(pattern, path)
 		if err != nil {
 			warnf("%s", err)
 			continue
@@ -488,11 +598,42 @@ func (g *godemon) shouldIgnore(path string) bool {
 			return true
 		}
 	}
+	// If there are no "--only" patterns, then the path shouldn't be ignored,
+	// since the input path to this func must have fallen under the watched dirs.
 	if len(g.cfg.Only) == 0 {
 		return false
 	}
+	// If this is a dir, return whether any of the "--only" patterns might fall
+	// under the dir.
+
+	// TODO: Handle symlinks.
+	if isDir(path) {
+		// If path is /foo/bar and we are watching only /foo, and absolute watch
+		// patterns are /foo/**/*.go, Then /foo/bar should be watched because
+		// /foo/bar/ matches /foo/**/
+		for _, pattern := range g.cfg.Only {
+			pattern = toAbsolutePattern(parent, pattern)
+			if strings.Contains(pattern, "/**/") {
+				// Delete everything after the first occurrence of "/**/"
+				i := strings.Index(pattern, "/**/")
+				pattern = pattern[:i+len("/**/")]
+				// Check whether this modified pattern matches the dir path
+				match, err := doublestar.Match(pattern, path+"/")
+				if err != nil {
+					warnf("%s", err)
+					continue
+				}
+				if match {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	// If this is a file, return whether it matches any of the --only patterns.
 	for _, pattern := range g.cfg.Only {
-		match, err := doublestar.PathMatch(pattern, path)
+		pattern = toAbsolutePattern(parent, pattern)
+		match, err := doublestar.Match(pattern, path)
 		if err != nil {
 			warnf("%s", err)
 			continue
@@ -525,7 +666,7 @@ func (g *godemon) handleAdds(addCh chan string) {
 					continue
 				}
 				for _, entry := range entries {
-					absPath := filepath.Join(path, entry.Name())
+					absPath := pathJoin(path, entry.Name())
 					if entry.IsDir() {
 						select {
 						case addCh <- absPath:
