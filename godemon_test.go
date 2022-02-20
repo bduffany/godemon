@@ -8,62 +8,34 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/mitchellh/go-ps"
 )
 
 var (
 	anyWhitespace = regexp.MustCompile(`\s+`)
 )
 
-type ProcInfo struct {
-	PID   int
-	State string
-	Cmd   []string
-}
-
-func (p *ProcInfo) String() string {
-	return fmt.Sprintf("PID: %d, S: %s, CMD: %s", p.PID, p.State, p.Cmd)
-}
-
 type ProcSnapshot struct {
-	Processes map[int]*ProcInfo
+	Processes map[int]ps.Process
 }
 
 // TODO: make this cross-platform
 
 func NewProcSnapshot() (*ProcSnapshot, error) {
-	output, err := exec.Command("ps", "-o", "pid,state,cmd").CombinedOutput()
+	processes, err := ps.Processes()
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(string(output), "\n")
 	snap := &ProcSnapshot{
-		Processes: map[int]*ProcInfo{},
+		Processes: map[int]ps.Process{},
 	}
-	for _, line := range lines[1:] {
-		line = strings.TrimSpace(line)
-		line = anyWhitespace.ReplaceAllLiteralString(line, " ")
-		fields := strings.Split(line, " ")
-		if len(fields) < 3 {
-			continue
-		}
-		// Exclude the PS command itself
-		if fields[2] == "ps" {
-			continue
-		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil {
-			return nil, err
-		}
-		snap.Processes[pid] = &ProcInfo{
-			PID:   pid,
-			State: fields[1],
-			Cmd:   fields[2:],
-		}
+	for _, p := range processes {
+		snap.Processes[p.Pid()] = p
 	}
 	return snap, nil
 }
@@ -75,7 +47,7 @@ func (s *ProcSnapshot) Diff() (*ProcSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	diff := map[int]*ProcInfo{}
+	diff := map[int]ps.Process{}
 	for k, v := range n.Processes {
 		if _, ok := s.Processes[k]; !ok {
 			diff[k] = v
@@ -120,7 +92,7 @@ func TestSendSIGINTToSleepCommandTerminates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	g := exec.CommandContext(ctx, "godemon", "sleep", "infinity")
+	g := exec.CommandContext(ctx, "./godemon", "-v", "-v", "sleep", "infinity")
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +143,7 @@ func TestSendMultipleCtrlCToBadlyBehavedCommandTerminatesAfter3CtrlC(t *testing.
 		t.Fatal(err)
 	}
 
-	g := exec.CommandContext(ctx, "godemon", "-v", "-v", "sh", "-c", `
+	g := exec.CommandContext(ctx, "./godemon", "-v", "-v", "sh", "-c", `
 	  trap "echo 'Ignoring SIGINT'" INT
 	  while true; do
 			sleep 0.01

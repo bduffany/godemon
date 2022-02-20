@@ -7,16 +7,28 @@
 
 # godemon
 
-godemon lets you restart a command when files change. It is useful for
-things like automatically rebuilding your application when you edit source
-files.
+godemon lets you run a command that is restarted whenever files change.
 
-Like [nodemon](https://github.com/remy/nodemon), but written in Go.
+It is great for:
 
-**STATUS: WIP**. Signal handling, child process management, etc. is not quite
-battle-tested and may have some bugs.
+- Restarting a development server whenever you change source code
+- Running tests whenever you change source code
+- Mirroring a directory to another location, using a tool like `rsync`
+- Lots of other things!
 
-## Install
+It is like [nodemon](https://github.com/remy/nodemon), but with a few key
+differences:
+
+- Written in Go
+- General purpose: works with any command, and gives no special treatment
+  to nodejs
+- Portable: ships as a single binary with no external dependencies
+
+Tested mostly on Mac and Linux. It has not yet been tested on Windows.
+
+## Installation
+
+The easiest way to install godemon is with the `go` CLI:
 
 ```bash
 go install github.com/bduffany/godemon@latest
@@ -64,18 +76,6 @@ godemon --ignore '**/build/**' --ignore '**/dist/**' command
 
 ## Default ignored patterns
 
-The default ignored patterns are:
-
-```
-**/__pycache__/**
-**/.git/**
-**/.hg/**
-**/.svn/**
-**/*.swp
-**/*.swx
-**/bazel-*/**
-**/CVS/**
-**/node_modules/**
-```
+The default ignored patterns are listed in [default_ignore.go](https://github.com/bduffany/godemon/tree/master/default_ignore.go).
 
 To disable the default ignore list, pass `--no-default-ignore`.

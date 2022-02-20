@@ -19,21 +19,6 @@ import (
 )
 
 var (
-	defaultIgnorePatterns = []string{
-		// Version control
-		"**/.git/**",
-		"**/.hg/**",
-		"**/.svn/**",
-		"**/CVS/**",
-		// Build artifacts
-		"**/node_modules/**",
-		"**/bazel-*/**",
-		"**/__pycache__/**",
-		// Editor artifacts
-		"**/*.swp",
-		"**/*.swx",
-	}
-
 	logLevels = map[string]int{
 		"DEBUG":   0,
 		"INFO":    1,
