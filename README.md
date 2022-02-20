@@ -54,8 +54,9 @@ change:
 godemon command
 ```
 
-To watch multiple directories, use `--watch` or `-w`. When using this
-flag, the current directory needs to be passed explicitly:
+To watch multiple directories, use `--watch` or `-w`. **When using this
+flag, the current directory needs to be passed explicitly,** otherwise
+it's assumed that you only want to watch `/some/other/dir (in this example).
 
 ```bash
 godemon --watch . --watch /some/other/dir command
