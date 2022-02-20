@@ -24,7 +24,7 @@ differences:
   to nodejs
 - Portable: ships as a single binary with no external dependencies
 
-Tested mostly on Mac and Linux. It has not yet been tested on Windows.
+Tested on Mac and Linux. It has not yet been tested on Windows.
 
 ## Installation
 
@@ -76,6 +76,7 @@ godemon --ignore '**/build/**' --ignore '**/dist/**' command
 
 ## Default ignored patterns
 
-The default ignored patterns are listed in [default_ignore.go](https://github.com/bduffany/godemon/tree/master/default_ignore.go).
+The default ignored patterns are listed in
+[default_ignore.go](https://github.com/bduffany/godemon/tree/master/default_ignore.go).
 
 To disable the default ignore list, pass `--no-default-ignore`.
