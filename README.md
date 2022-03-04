@@ -7,7 +7,8 @@
 
 # godemon
 
-godemon lets you run a command that is restarted whenever files change.
+godemon is a tool that runs a command, monitors for changes to files,
+and restarts the command automatically whenever files change.
 
 It is great for:
 
@@ -16,15 +17,15 @@ It is great for:
 - Mirroring a directory to another location, using a tool like `rsync`
 - Lots of other things!
 
-It is like [nodemon](https://github.com/remy/nodemon), but with a few key
-differences:
+It is inspired by [nodemon](https://github.com/remy/nodemon) which
+is a similar tool written in JavaScript.
 
-- Written in Go
-- General purpose: works with any command, and gives no special treatment
-  to nodejs
-- Portable: ships as a single binary with no external dependencies
+## Status
 
-Tested on Mac and Linux. It has not yet been tested on Windows.
+godemon has been tested on Mac and Linux. It has not yet been tested on
+Windows.
+
+The command line interface and config file format are not yet stable.
 
 ## Installation
 

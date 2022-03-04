@@ -15,95 +15,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
-	"github.com/mitchellh/go-ps"
 )
-
-var (
-	logLevels = map[string]int{
-		"DEBUG":   0,
-		"INFO":    1,
-		"NOTIFY":  2,
-		"WARNING": 3,
-		"ERROR":   4,
-		"FATAL":   5,
-	}
-	logLevel = logLevels["NOTIFY"]
-)
-
-func logf(level, format string, args ...interface{}) {
-	if logLevels[level] < logLevel {
-		return
-	}
-	const gray = "\x1b[90m"
-	const reset = "\x1b[0m"
-	prefix := "[godemon] "
-	// Don't show NOTIFY prefix since these are very common and are intended
-	// to be user friendly.
-	if level != "NOTIFY" {
-		prefix += level + ": "
-	}
-	fmt.Printf(gray+prefix+format+reset+"\n", args...)
-	if level == "FATAL" {
-		os.Exit(1)
-	}
-}
-
-func debugf(format string, args ...interface{}) {
-	logf("DEBUG", format, args...)
-}
-func infof(format string, args ...interface{}) {
-	logf("INFO", format, args...)
-}
-func notifyf(format string, args ...interface{}) {
-	logf("NOTIFY", format, args...)
-}
-func warnf(format string, args ...interface{}) {
-	logf("WARNING", format, args...)
-}
-func errorf(format string, args ...interface{}) {
-	logf("ERROR", format, args...)
-}
-func fatalf(format string, args ...interface{}) {
-	logf("FATAL", format, args...)
-}
-
-type Config struct {
-	// Command is the command and arguments to be executed upon any change.
-	//
-	// The command is not interpreted using a shell. If you would like shell
-	// features such as environment variable expansion, specify the command
-	// using something like the following:
-	//
-	//     ["sh", "-c", "$YOUR_COMMAND"]
-	Command []string `json:"command"`
-
-	// Watch specifies a list of files or directories to be watched. Defaults to
-	// the current working directory from which the command is invoked.
-	// Directories are watched recursively.
-	// TODO(bduffany): Accept glob patterns here.
-	Watch []string `json:"watch,omitempty"`
-	// Only specifies a list of allowed patterns. If non-empty, at least one
-	// pattern must match in order for the command to be executed.
-	Only []string `json:"only,omitempty"`
-	// Ignore specifies a list of paths to be ignored. Glob patterns are supported.
-	Ignore []string `json:"ignore,omitempty"`
-
-	// UseDefaultIgnoreList specifies whether to use the default list of
-	// ignore patterns. These will be appended to the list of ignore patterns.
-	// Defaults to true.
-	UseDefaultIgnoreList *bool `json:"useDefaultIgnoreList,omitempty"`
-	// UseGitignore specifies whether to respect .gitignore files when watching
-	// directories.
-	// Defaults to true.
-	UseGitignore *bool `json:"useGitignore,omitempty"`
-	// NotifySignal is the signal used to notify the command of file changes.
-	// Defaults to "SIGINT" (Ctrl+C), which should gracefully stop most
-	// well-behaved commands.
-	NotifySignal *string `json:"notifySignal,omitempty"`
-	notifySignal syscall.Signal
-
-	// TODO: FollowSymlinks
-}
 
 func isDir(path string) bool {
 	s, err := os.Stat(path)
@@ -362,31 +274,35 @@ func toAbsolutePattern(parent, pattern string) string {
 	return pathJoin(parent, pattern)
 }
 
-func descendantPids(pid int) ([]int, error) {
-	processes, err := ps.Processes()
-	if err != nil {
-		return nil, err
+type Cmd struct {
+	*exec.Cmd
+	stdin *StdinRouter
+}
+
+func newCommand(stdin *StdinRouter, cfg *Config) *Cmd {
+	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return &Cmd{cmd, stdin}
+}
+
+func (c *Cmd) Start() error {
+	notifyStarted := c.stdin.SetDestination(c.Cmd)
+	if err := c.Cmd.Start(); err != nil {
+		return err
 	}
-	ppid := make(map[int]int, len(processes))
-	for _, p := range processes {
-		ppid[p.Pid()] = p.PPid()
-	}
-	var childPids []int
-	for _, p := range processes {
-		cur := p.Pid()
-		for {
-			ppid, ok := ppid[cur]
-			if !ok {
-				break
-			}
-			cur = ppid
-			if cur == pid {
-				childPids = append(childPids, p.Pid())
-				break
-			}
+	notifyStarted()
+
+	commandExited := make(chan struct{}, 1)
+	go func() {
+		if err := c.Wait(); err != nil {
+			notifyf("Command exited: %s", err)
+		} else {
+			notifyf("Command exited cleanly")
 		}
-	}
-	return childPids, nil
+		commandExited <- struct{}{}
+	}()
+	return nil
 }
 
 type godemon struct {
@@ -399,19 +315,15 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 	sig := make(chan os.Signal, 4)
 	signal.Notify(sig)
 
-	newCommand := func() *exec.Cmd {
-		cmd := exec.Command(g.cfg.Command[0], g.cfg.Command[1:]...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd
-	}
+	nShutdownAttempts := 0
+	var mu sync.Mutex
 
-	cmd := newCommand()
+	stdin := NewStdinRouter()
+
+	cmd := newCommand(stdin, g.cfg)
 	if err := cmd.Start(); err != nil {
 		fatalf("Could not start command: %s", err)
 	}
-	nShutdownAttempts := 0
-	var mu sync.Mutex
 
 	// Signal handler
 	go func() {
@@ -498,7 +410,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 		}
 		debugf("Command shutdown successfully.")
 
-		next := newCommand()
+		next := newCommand(stdin, g.cfg)
 		if err := next.Start(); err != nil {
 			fatalf("Could not start command: %s", err)
 		}

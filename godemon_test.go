@@ -5,56 +5,17 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/mitchellh/go-ps"
 )
 
 var (
 	anyWhitespace = regexp.MustCompile(`\s+`)
 )
-
-type ProcSnapshot struct {
-	Processes map[int]ps.Process
-}
-
-// TODO: make this cross-platform
-
-func NewProcSnapshot() (*ProcSnapshot, error) {
-	processes, err := ps.Processes()
-	if err != nil {
-		return nil, err
-	}
-	snap := &ProcSnapshot{
-		Processes: map[int]ps.Process{},
-	}
-	for _, p := range processes {
-		snap.Processes[p.Pid()] = p
-	}
-	return snap, nil
-}
-
-// Diff returns a snapshot containing only processes which are different from
-// the previous snapshot.
-func (s *ProcSnapshot) Diff() (*ProcSnapshot, error) {
-	n, err := NewProcSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	diff := map[int]ps.Process{}
-	for k, v := range n.Processes {
-		if _, ok := s.Processes[k]; !ok {
-			diff[k] = v
-		}
-	}
-	return &ProcSnapshot{diff}, nil
-}
 
 func isSignaledErr(err error) bool {
 	if err, ok := err.(*exec.ExitError); ok {
@@ -133,8 +94,6 @@ func WaitContext(ctx context.Context, cmd *exec.Cmd) error {
 }
 
 func TestSendMultipleCtrlCToBadlyBehavedCommandTerminatesAfter3CtrlC(t *testing.T) {
-	fmt.Println("Starting")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 
