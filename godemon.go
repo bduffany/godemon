@@ -236,10 +236,10 @@ func throttleRestarts(events <-chan struct{}) chan struct{} {
 			case restart <- struct{}{}:
 			default:
 			}
-			// Make sure we go at least 25ms with no events before the next restart
+			// Make sure we go at least 50ms with no events before the next restart
 			// TODO: Make this configurable, and/or adaptive
 			for {
-				<-time.After(25 * time.Millisecond)
+				<-time.After(50 * time.Millisecond)
 				n := nonBlockingDrain(events)
 				if n == 0 {
 					break
@@ -382,6 +382,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 					} else {
 						debugf("Command exited")
 					}
+					fmt.Println()
 					os.Exit(130)
 				}
 				if isShutdown && n == 2 {
