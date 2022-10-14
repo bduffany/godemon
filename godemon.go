@@ -486,7 +486,7 @@ func (g *godemon) shouldIgnore(path string) bool {
 	}
 	if parent == "" {
 		errorf("Could not determine parent watch path of %q", path)
-		return false
+		return true
 	}
 	// If explicitly ignored, do not watch.
 	for _, pattern := range g.cfg.Ignore {
