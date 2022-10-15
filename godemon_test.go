@@ -5,8 +5,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
-	"regexp"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -14,8 +16,28 @@ import (
 )
 
 var (
-	anyWhitespace = regexp.MustCompile(`\s+`)
+	binaryPath string
 )
+
+const (
+	// countRunsScript is a shell script that counts the number of times
+	// it was invoked, using the file ../count
+	countRunsScript = `
+		if ! [ -e ../count ]; then
+			echo 0 > ../count
+		fi
+		count=$(cat ../count)
+		echo $(( count + 1 )) > ../count
+`
+)
+
+func init() {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	binaryPath = filepath.Join(wd, "godemon")
+}
 
 func isSignaledErr(err error) bool {
 	if err, ok := err.(*exec.ExitError); ok {
@@ -37,28 +59,158 @@ func isCleanExit(err error) bool {
 	if isSignaledErr(err) {
 		return true
 	}
-	// We exit with code 130 when interrupted with Ctrl+C.
-	if isExitErrCode(err, 130) {
+	// We exit with code 2 when interrupted with Ctrl+C.
+	if isExitErrCode(err, 2) {
 		return true
 	}
 	return false
+}
+
+func newTestWorkspace(t *testing.T) string {
+	root, err := os.MkdirTemp("", "godemon-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("Failed to clean up: %s", err)
+		}
+	})
+	// Layout of `root` looks like this:
+	// - godemon-test-abc123/  # `root`
+	//   - .                   # temp files go here, to avoid triggering godemon
+	//   - workspace/          # godemon working dir
+	//     -                   # `fnames` are written here
+	ws := filepath.Join(root, "workspace")
+	fnames := []string{
+		".git/config",
+		".gitignore",
+		"toplevel.go",
+		"lib/foo.go",
+		"lib/nested/bar.go",
+	}
+	for _, fname := range fnames {
+		dir := filepath.Dir(fname)
+		err := os.MkdirAll(filepath.Join(ws, dir), 0755)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Create(filepath.Join(ws, fname))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	return ws
+}
+
+func runCount(t *testing.T, godemon *exec.Cmd) int {
+	path := filepath.Join(godemon.Dir, "..", "count")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Logf("Failed to read count file: %s", err)
+		return 0
+	}
+	s := strings.TrimSpace(string(b))
+	count, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func expectRunCount(t *testing.T, ctx context.Context, godemon *exec.Cmd, count int) {
+	var c int
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for run count to equal %d (last count: %d)", count, c)
+		default:
+		}
+		c = runCount(t, godemon)
+		// Count will never decrease, so fail early.
+		if c > count {
+			t.Fatalf("unexpected run count: ran %d times but expected %d", c, count)
+		}
+		if c == count {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func touch(t *testing.T, ws string, fname string) {
+	f, err := os.Create(filepath.Join(ws, fname))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}
+
+func TestRestartOnCreate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g.Dir = newTestWorkspace(t)
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, g, 1)
+	touch(t, g.Dir, "NEW.go")
+
+	expectRunCount(t, ctx, g, 2)
+}
+
+func TestRestartOnEdit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g.Dir = newTestWorkspace(t)
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, g, 1)
+	touch(t, g.Dir, "toplevel.go")
+
+	expectRunCount(t, ctx, g, 2)
+}
+
+func TestDefaultIgnoreList(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g.Dir = newTestWorkspace(t)
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, g, 1)
+	touch(t, g.Dir, ".git/config")
+
+	time.Sleep(50 * time.Millisecond)
+	expectRunCount(t, ctx, g, 1)
 }
 
 func TestSendSIGINTToSleepCommandTerminates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	snap, err := NewProcSnapshot()
+	snap, err := NewTreeSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	g := exec.CommandContext(ctx, "./godemon", "-v", "-v", "sleep", "infinity")
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "sleep", "infinity")
+	g.Dir = newTestWorkspace(t)
+	g.Stdin = &bytes.Buffer{}
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
 	}
 
 	g.Process.Signal(syscall.SIGINT)
+	t.Log("Sent SIGINT")
 
 	if err := WaitContext(ctx, g); err != nil && !isCleanExit(err) {
 		t.Fatal(err)
@@ -94,24 +246,26 @@ func WaitContext(ctx context.Context, cmd *exec.Cmd) error {
 }
 
 func TestSendMultipleCtrlCToBadlyBehavedCommandTerminatesAfter3CtrlC(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	snap, err := NewProcSnapshot()
+	snap, err := NewTreeSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	g := exec.CommandContext(ctx, "./godemon", "-v", "-v", "sh", "-c", `
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "sh", "-c", `
 	  trap "echo 'Ignoring SIGINT'" INT
 	  while true; do
-			sleep 0.01
 			echo 'Listening for SIGINT'
+			sleep 0.01
 		done
 	`)
+	g.Dir = newTestWorkspace(t)
 	buf := &bytes.Buffer{}
 	g.Stderr = buf
 	g.Stdout = buf
+	g.Stdin = &bytes.Buffer{}
 	if err := g.Start(); err != nil && !isCleanExit(err) {
 		t.Fatal(err)
 	}

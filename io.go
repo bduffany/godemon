@@ -3,7 +3,6 @@ package main
 import (
 	"io"
 	"os"
-	"os/exec"
 	"sync"
 )
 
@@ -13,9 +12,12 @@ import (
 // It warns when input is received and there is no currently active command
 // to handle the input.
 type StdinRouter struct {
-	pr *io.PipeReader
 	pw *io.PipeWriter
 	mu sync.Mutex
+	// closed indicates whether stdin is NOT from a terminal and we have received
+	// EOF (when stdin is from a terminal, we don't ever consider stdin closed,
+	// since the user can send EOF via Ctrl+D on subsequent command restarts).
+	closed bool
 }
 
 func NewStdinRouter() *StdinRouter {
@@ -34,7 +36,7 @@ func (p *StdinRouter) start() {
 			b := buf[:n]
 			eof := err == io.EOF
 			if err != nil {
-				debugf("read stdin: %s", err)
+				debugf("stdin read error: %s", err)
 			}
 
 			p.mu.Lock()
@@ -48,21 +50,37 @@ func (p *StdinRouter) start() {
 				}
 				continue
 			}
-			_, err = pw.Write(b)
-			if err == io.ErrClosedPipe {
-				if !warned {
-					warnf("no command is running; input will be dropped.")
-					warned = true
+
+			if len(b) > 0 {
+				_, err = pw.Write(b)
+				if err == io.ErrClosedPipe {
+					debugf("failed to write to command stdin: %s", err)
+					if !warned {
+						warnf("no command is running; input will be dropped.")
+						warned = true
+					}
+					continue
 				}
-				continue
-			}
-			if err != nil {
-				errorf("Failed to forward stdin to command: %s", err)
-				continue
+				if err != nil {
+					errorf("Failed to forward stdin to command: %s", err)
+					continue
+				}
 			}
 
 			if eof {
 				pw.Close()
+				fi, err := os.Stdin.Stat()
+				if err != nil {
+					debugf("stat stdin failed: %s", err)
+				} else if (fi.Mode() & os.ModeCharDevice) == 0 {
+					debugf("stdin is not from a terminal; permanently closing stdin.")
+					p.mu.Lock()
+					p.closed = true
+					p.mu.Unlock()
+					return
+				} else {
+					debugf("stdin is from a terminal; will continue streaming.")
+				}
 			}
 
 			warned = false
@@ -70,23 +88,20 @@ func (p *StdinRouter) start() {
 	}()
 }
 
-func (p *StdinRouter) SetDestination(cmd *exec.Cmd) (notifyStarted func()) {
-	pr, pw := io.Pipe()
-	p.pr = pr
+// Reader returns a reader from os.Stdin.
+//
+// The returned PipeReader must be closed after calling cmd.Process.Wait(), NOT
+// cmd.Wait(), since cmd.Wait() will wait until the command exhausts os.Stdin.
+func (p *StdinRouter) Reader() *io.PipeReader {
 	p.mu.Lock()
-	p.pw = pw
-	p.mu.Unlock()
+	defer p.mu.Unlock()
 
-	cmd.Stdin = pr
-	return func() {
-		go func() {
-			// Note: Not calling cmd.Wait() here, because it will also wait for the
-			// current read on the PipeReader to complete, which we don't want.
-			// We want this to terminate as soon as the process exits.
-			if _, err := cmd.Process.Wait(); err != nil {
-				debugf("%s", err)
-			}
-			pr.Close()
-		}()
+	pr, pw := io.Pipe()
+	p.pw = pw
+
+	if p.closed {
+		pw.Close()
 	}
+
+	return pr
 }

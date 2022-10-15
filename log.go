@@ -21,9 +21,13 @@ func logf(level, format string, args ...interface{}) {
 	if logLevels[level] < logLevel {
 		return
 	}
+	// TODO: Disable colors if not writing to terminal
 	const gray = "\x1b[90m"
 	const reset = "\x1b[0m"
-	prefix := "[godemon] "
+	prefix, ok := os.LookupEnv("GODEMON_LOG_PREFIX")
+	if !ok {
+		prefix = "[godemon] "
+	}
 	// Don't show NOTIFY prefix since these are very common and are intended
 	// to be user friendly.
 	if level != "NOTIFY" {

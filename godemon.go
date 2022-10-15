@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,6 +16,12 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
+)
+
+const (
+	// DefaultNotifySignal is the default signal sent to a command on changes
+	// (in order to get it to restart).
+	DefaultNotifySignal = syscall.SIGTERM
 )
 
 func isDir(path string) bool {
@@ -44,7 +51,7 @@ func parseSignal(name string) (syscall.Signal, error) {
 	case "KILL":
 		return syscall.SIGKILL, nil
 	}
-	return 0, fmt.Errorf("Unsupported signal %q", name)
+	return 0, fmt.Errorf("unsupported signal %q", name)
 }
 
 func printUsage() {
@@ -100,8 +107,12 @@ func parseConfig() (*Config, error) {
 			noDefaultIgnore = true
 			continue
 		}
-		if arg == "-v" || arg == "--verbose" {
+		if arg == "--verbose" {
 			logLevel--
+			continue
+		}
+		if arg == "-v" || arg == "-vv" || arg == "-vvv" || arg == "-vvvv" {
+			logLevel -= len(arg) - 1
 			continue
 		}
 
@@ -189,7 +200,7 @@ func parseConfig() (*Config, error) {
 		cfg.NotifySignal = &signal
 	}
 	if cfg.NotifySignal == nil {
-		cfg.notifySignal = syscall.SIGINT
+		cfg.notifySignal = DefaultNotifySignal
 	} else {
 		s, err := parseSignal(*cfg.NotifySignal)
 		if err != nil {
@@ -276,33 +287,57 @@ func toAbsolutePattern(parent, pattern string) string {
 
 type Cmd struct {
 	*exec.Cmd
-	stdin *StdinRouter
+	stdin     *StdinRouter
+	stdinPipe *io.PipeReader
+
+	willShutdown bool
+
+	waitOnce sync.Once
+	waitErr  error
 }
 
 func newCommand(stdin *StdinRouter, cfg *Config) *Cmd {
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return &Cmd{cmd, stdin}
+	return &Cmd{Cmd: cmd, stdin: stdin}
+}
+
+func (c *Cmd) Shutdown(s syscall.Signal) error {
+	c.willShutdown = true
+	if err := c.Process.Signal(s); err != nil {
+		if err == os.ErrProcessDone {
+			debugf("Signal() failed: %s", err)
+		} else {
+			errorf("Signal() failed: %s", err)
+			// TODO: crash here?
+		}
+	}
+	err := c.Wait()
+	debugf("Wait() error: %s", err)
+	return nil
 }
 
 func (c *Cmd) Start() error {
-	notifyStarted := c.stdin.SetDestination(c.Cmd)
+	c.stdinPipe = c.stdin.Reader()
+	c.Cmd.Stdin = c.stdinPipe
 	if err := c.Cmd.Start(); err != nil {
 		return err
 	}
-	notifyStarted()
-
-	commandExited := make(chan struct{}, 1)
-	go func() {
-		if err := c.Wait(); err != nil {
-			notifyf("Command exited: %s", err)
-		} else {
-			notifyf("Command exited cleanly")
-		}
-		commandExited <- struct{}{}
-	}()
+	go c.Wait()
 	return nil
+}
+
+func (c *Cmd) Wait() error {
+	c.waitOnce.Do(func() {
+		debugf("c.Wait()")
+		_, c.waitErr = c.Cmd.Process.Wait()
+		c.stdinPipe.Close()
+		if !c.willShutdown {
+			notifyf("Command finished")
+		}
+	})
+	return c.waitErr
 }
 
 type godemon struct {
@@ -353,19 +388,11 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 			// TODO: Test in non-Unix environments
 			if isShutdown && n == 3 {
 				debugf("Escalating to SIGKILL")
-				if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
-					errorf("SIGKILL returned an error: %s", err)
+				if err := KillProcessTree(cmd.Process.Pid); err != nil {
+					debugf("Failed to clean up process tree: %s", err)
 				}
-				cpids, err := descendantPids(cmd.Process.Pid)
-				if err != nil {
-					errorf("Failed to determine child pids: %s", err)
-				}
-				for _, cpid := range cpids {
-					if err := syscall.Kill(cpid, syscall.SIGKILL); err != nil {
-						errorf("Failed to SIGKILL child process: %s", err)
-					}
-				}
-				os.Exit(130)
+				debugf("Killed process tree for pid %d", cmd.Process.Pid)
+				os.Exit(2)
 			}
 
 			// Forward the signal and wait for shutdown in the background so that we
@@ -373,17 +400,18 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 			go func() {
 				debugf("Forwarding signal %d %q", s, s)
 				if err := cmd.Process.Signal(s); err != nil {
-					debugf("SIGKILL itself returned an error: %s", err)
+					debugf("Failed to forward signal %s: %s", s, err)
 				}
 
 				if isShutdown && n == 1 {
+					debugf("Waiting for command to exit.")
 					if err := cmd.Wait(); err != nil {
 						debugf("Command exited with err (expected): %s", err)
 					} else {
 						debugf("Command exited")
 					}
 					fmt.Println()
-					os.Exit(130)
+					os.Exit(2)
 				}
 				if isShutdown && n == 2 {
 					notifyf("Command is still shutting down (Ctrl+C again to force)")
@@ -405,11 +433,9 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 		mu.Unlock()
 
 		notifyf("Restarting due to changes")
-		current.Process.Signal(g.cfg.notifySignal)
-		if err := current.Wait(); err != nil {
-			errorf("%s", err)
-		}
-		debugf("Command shutdown successfully.")
+		debugf("Sending notify signal: %s", g.cfg.notifySignal)
+
+		_ = current.Shutdown(g.cfg.notifySignal)
 
 		next := newCommand(stdin, g.cfg)
 		if err := next.Start(); err != nil {
