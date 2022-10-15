@@ -73,10 +73,11 @@ Advanced options:
 `)
 }
 
-func parseConfig() (*Config, error) {
+func parseConfig(args []string) (*Config, error) {
 	cfg := &Config{}
 
-	args := os.Args[1:]
+	// Ignore arg0 (executable name)
+	args = args[1:]
 
 	if len(args) == 1 && args[0] == "help" {
 		printUsage()
@@ -633,8 +634,8 @@ func (g *godemon) handleEvents(addCh chan<- string, restartCh chan<- struct{}, s
 	}
 }
 
-func main() {
-	cfg, err := parseConfig()
+func Main(args []string) {
+	cfg, err := parseConfig(args)
 	if err != nil {
 		fmt.Printf("%s: %s\n", os.Args[0], err)
 		fmt.Println("Try \"godemon --help\" for more information.")
@@ -645,4 +646,8 @@ func main() {
 	if err := g.Start(); err != nil {
 		fatalf("%s", err)
 	}
+}
+
+func main() {
+	Main(os.Args)
 }
