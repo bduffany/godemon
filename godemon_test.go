@@ -112,6 +112,9 @@ func runCount(t *testing.T, godemon *exec.Cmd) int {
 		return 0
 	}
 	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return 0
+	}
 	count, err := strconv.Atoi(s)
 	if err != nil {
 		t.Fatal(err)
