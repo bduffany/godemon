@@ -1,6 +1,6 @@
 module github.com/bduffany/godemon
 
-go 1.17
+go 1.18
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.0.2
