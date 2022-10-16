@@ -194,6 +194,21 @@ func TestRestartOnEdit(t *testing.T) {
 	expectRunCount(t, ctx, g, 2)
 }
 
+func TestWatchSingleFile(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "-w", "./toplevel.go", "-vv", "bash", "-c", countRunsScript)
+	g.Dir = newTestWorkspace(t)
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, g, 1)
+	touch(t, g.Dir, "toplevel.go")
+
+	expectRunCount(t, ctx, g, 2)
+}
+
 func TestDefaultIgnoreList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()

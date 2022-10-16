@@ -244,9 +244,11 @@ func relativePatterns(exprs []string) []*pattern {
 
 func addGitignorePatterns(cfg *Config, path string) error {
 	// TODO: Handle negation (!)
-	// TODO: Traverse upwards to find .gitignore, rather than assuming we're in
+	// TODO: Traverse upwards to find .git, rather than assuming we're in
 	// the repo root.
-
+	if !isDir(path) {
+		return nil
+	}
 	dotGitExists, err := exists(filepath.Join(path, ".git"))
 	if err != nil {
 		return err
