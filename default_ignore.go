@@ -12,8 +12,9 @@ var defaultIgnorePatterns = []string{
 	"**/node_modules/**",
 	// Bazel output symlinks
 	"**/bazel-*/**",
-	// Python bytecode
+	// Python
 	"**/__pycache__/**",
+	"**/.pytest_cache/**",
 	// Text editor backup / lockfiles
 	// Vim
 	"**/*.swp",
