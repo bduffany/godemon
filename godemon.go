@@ -68,6 +68,7 @@ Basic options:
 
 Advanced options:
   --no-default-ignore  disable the default ignore list (version control dirs, etc.)
+  --no-gitignore       disable adding patterns from .gitignore to ignore list
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
 `)
@@ -90,7 +91,9 @@ func parseConfig(args []string) (*Config, error) {
 	only := []string{}
 	isParsingCommand := false
 	noDefaultIgnore := false
+	noGitignore := false
 	signal := ""
+	dryRun := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if isParsingCommand {
@@ -108,8 +111,16 @@ func parseConfig(args []string) (*Config, error) {
 			noDefaultIgnore = true
 			continue
 		}
+		if arg == "--no-gitignore" {
+			noGitignore = true
+			continue
+		}
 		if arg == "--verbose" {
 			logLevel--
+			continue
+		}
+		if arg == "--dry-run" {
+			dryRun = true
 			continue
 		}
 		if arg == "-v" || arg == "-vv" || arg == "-vvv" || arg == "-vvvv" {
@@ -190,13 +201,37 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		cfg.Watch[i] = abs
 	}
+
 	if cfg.UseDefaultIgnoreList == nil {
 		val := true
 		cfg.UseDefaultIgnoreList = &val
 	}
+	if noDefaultIgnore {
+		cfg.UseDefaultIgnoreList = pointerTo(false)
+	}
 	if *cfg.UseDefaultIgnoreList {
 		cfg.Ignore = append(cfg.Ignore, defaultIgnorePatterns...)
 	}
+
+	// Patterns in the config or on the command line can only be relative patterns
+	// for now.
+	cfg.ignorePatterns = relativePatterns(cfg.Ignore)
+	cfg.onlyPatterns = relativePatterns(cfg.Only)
+
+	if cfg.UseGitignore == nil {
+		cfg.UseGitignore = pointerTo(true)
+	}
+	if noGitignore {
+		cfg.UseGitignore = pointerTo(false)
+	}
+	if *cfg.UseGitignore {
+		for _, w := range cfg.Watch {
+			if err := addGitignorePatterns(cfg, w); err != nil {
+				return nil, fmt.Errorf("failed to add .gitignore patterns: %s", err)
+			}
+		}
+	}
+
 	if signal != "" {
 		cfg.NotifySignal = &signal
 	}
@@ -209,14 +244,89 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		cfg.notifySignal = s
 	}
-	if noDefaultIgnore {
-		val := false
-		cfg.UseDefaultIgnoreList = &val
-	}
 	if len(cfg.Command) == 0 {
 		return nil, fmt.Errorf("must specify a command to run")
 	}
+	cfg.dryRun = dryRun
+
+	debugf("Configured ignore patterns:")
+	for _, p := range cfg.ignorePatterns {
+		t := ""
+		if p.Absolute {
+			t = "(absolute)"
+		}
+		debugf("- %q %s", p.Expr, t)
+	}
+
 	return cfg, nil
+}
+
+type pattern struct {
+	// Expr is the glob expression matched by this pattern, with .gitignore
+	// semantics.
+	Expr string
+	// Absolute modifier. If set, the semantics of a leading "/" are modified to
+	// mean "relative to the FS root", rather than relative to the parent watch
+	// dir.
+	Absolute bool
+}
+
+func relativePatterns(exprs []string) []*pattern {
+	out := make([]*pattern, 0, len(exprs))
+	for _, e := range exprs {
+		out = append(out, &pattern{Expr: e})
+	}
+	return out
+}
+
+func addGitignorePatterns(cfg *Config, path string) error {
+	// TODO: Handle negation (!)
+	// TODO: Traverse upwards to find .gitignore, rather than assuming we're in
+	// the repo root.
+
+	dotGitExists, err := exists(filepath.Join(path, ".git"))
+	if err != nil {
+		return err
+	}
+	if !dotGitExists {
+		return nil
+	}
+	// TODO: Use `git ls-files` to find all .gitignore paths in the repo, and
+	// incorporate those too.
+	b, err := os.ReadFile(filepath.Join(path, ".gitignore"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	patterns := parseGitignore(b, path)
+	cfg.ignorePatterns = append(cfg.ignorePatterns, patterns...)
+	return nil
+}
+
+func parseGitignore(b []byte, path string) []*pattern {
+	var patterns []*pattern
+	lines := strings.Split(string(b), "\n")
+	for _, line := range lines {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		expr := line
+		// Patterns like "foo", "*.txt" become "**/foo", "**/*.txt"
+		if !strings.HasPrefix(expr, "/") && !strings.HasPrefix(expr, "**/") {
+			expr = "**/" + expr
+		}
+		if !strings.HasSuffix(expr, "*") {
+			expr = expr + "/**"
+		}
+		p := &pattern{
+			Expr:     filepath.Join(path, expr),
+			Absolute: true,
+		}
+		patterns = append(patterns, p)
+	}
+	return patterns
 }
 
 func nonBlockingDrain(ch <-chan struct{}) int {
@@ -272,9 +382,16 @@ func pathJoin(paths ...string) string {
 	return joined
 }
 
-func toAbsolutePattern(parent, pattern string) string {
-	// Paths starting with / are interpreted directly relative
-	// to the parent
+func toAbsolutePattern(parent string, p *pattern) string {
+	if p.Absolute {
+		return p.Expr
+	}
+	pattern := p.Expr
+	// Paths starting with / or ./ are interpreted directly relative
+	// to the parent, matching .gitignore behavior
+	if strings.HasPrefix(pattern, "./") {
+		pattern = pattern[1:]
+	}
 	if strings.HasPrefix(pattern, "/") {
 		return pathJoin(parent, pattern)
 	}
@@ -332,10 +449,19 @@ func (c *Cmd) Start() error {
 func (c *Cmd) Wait() error {
 	c.waitOnce.Do(func() {
 		debugf("c.Wait()")
-		_, c.waitErr = c.Cmd.Process.Wait()
+		s, err := c.Cmd.Process.Wait()
+		c.waitErr = err
 		c.stdinPipe.Close()
 		if !c.willShutdown {
-			notifyf("Command finished")
+			info := ""
+			if s, ok := s.Sys().(syscall.WaitStatus); ok {
+				if s.Exited() {
+					info = fmt.Sprintf(" (exit code %d)", s.ExitStatus())
+				} else if s.Signaled() {
+					info = fmt.Sprintf(" (%s)", s.Signal())
+				}
+			}
+			notifyf("Command finished%s", info)
 		}
 	})
 	return c.waitErr
@@ -481,6 +607,13 @@ func (g *godemon) Start() error {
 	// Command worker
 	restart := throttleRestarts(events)
 
+	if g.cfg.dryRun {
+		// Allow 1s for file watchers to be set up.
+		// TODO: Wait till addCh settles instead.
+		time.Sleep(1 * time.Second)
+		notifyf("Exiting due to --dry-run flag.")
+	}
+
 	go g.loopCommand(restart, shutdownCh)
 
 	// Wait for events and dispatch to the appropriate handler.
@@ -493,12 +626,16 @@ func (g *godemon) shouldIgnore(path string) bool {
 	// Determine which watched parent dir the path falls under.
 	// TODO: Handle overlapping watch paths.
 	// TODO: Handle file watch paths.
+
+	// TODO: Can this be simplified by instead appending all ignore patterns to
+	// the watch paths ahead of time, then just doing a simple prefix check?
 	parent := ""
 	for _, w := range g.cfg.Watch {
 		// Never ignore explicitly watched paths.
 		// TODO: Consider allowing ignore patterns to act as override flags to
 		// prevent earlier explicitly watched paths from actually being watched.
 		if w == path {
+			debugf("not ignoring explicitly watched path %s", path)
 			return false
 		}
 		// TODO: Cache this syscall result?
@@ -515,9 +652,10 @@ func (g *godemon) shouldIgnore(path string) bool {
 		errorf("Could not determine parent watch path of %q", path)
 		return true
 	}
+	debugf("parent watch path of %s: %s", path, parent)
 	// If explicitly ignored, do not watch.
-	for _, pattern := range g.cfg.Ignore {
-		pattern = toAbsolutePattern(parent, pattern)
+	for _, p := range g.cfg.ignorePatterns {
+		pattern := toAbsolutePattern(parent, p)
 		match, err := doublestar.Match(pattern, path)
 		if err != nil {
 			warnf("%s", err)
@@ -540,8 +678,8 @@ func (g *godemon) shouldIgnore(path string) bool {
 		// If path is /foo/bar and we are watching only /foo, and absolute watch
 		// patterns are /foo/**/*.go, Then /foo/bar should be watched because
 		// /foo/bar/ matches /foo/**/
-		for _, pattern := range g.cfg.Only {
-			pattern = toAbsolutePattern(parent, pattern)
+		for _, p := range g.cfg.onlyPatterns {
+			pattern := toAbsolutePattern(parent, p)
 			if strings.Contains(pattern, "/**/") {
 				// Delete everything after the first occurrence of "/**/"
 				i := strings.Index(pattern, "/**/")
@@ -560,8 +698,8 @@ func (g *godemon) shouldIgnore(path string) bool {
 		return true
 	}
 	// If this is a file, return whether it matches any of the --only patterns.
-	for _, pattern := range g.cfg.Only {
-		pattern = toAbsolutePattern(parent, pattern)
+	for _, p := range g.cfg.onlyPatterns {
+		pattern := toAbsolutePattern(parent, p)
 		match, err := doublestar.Match(pattern, path)
 		if err != nil {
 			warnf("%s", err)

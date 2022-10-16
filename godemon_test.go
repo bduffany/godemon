@@ -28,10 +28,13 @@ const (
 		fi
 		count=$(cat ../count)
 		echo $(( count + 1 )) > ../count
+
+		sleep infinity
 `
 )
 
 func init() {
+	os.Setenv("GODEMON_LOG_PREFIX", "    [test-godemon] ")
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(err)
@@ -105,10 +108,9 @@ func newTestWorkspace(t *testing.T) string {
 }
 
 func runCount(t *testing.T, godemon *exec.Cmd) int {
-	path := filepath.Join(godemon.Dir, "..", "count")
+	path := filepath.Join(godemon.Dir, "../count")
 	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Logf("Failed to read count file: %s", err)
 		return 0
 	}
 	s := strings.TrimSpace(string(b))
@@ -148,6 +150,18 @@ func touch(t *testing.T, ws string, fname string) {
 		t.Fatal(err)
 	}
 	f.Close()
+}
+
+func writeFile(t *testing.T, ws string, fname string, content string) {
+	f, err := os.Create(filepath.Join(ws, fname))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	_, err = f.Write([]byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRestartOnCreate(t *testing.T) {
@@ -196,6 +210,35 @@ func TestDefaultIgnoreList(t *testing.T) {
 	expectRunCount(t, ctx, g, 1)
 }
 
+func TestGitignore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	err := os.Mkdir(filepath.Join(ws, "ignored"), 0755)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TODO: more complete tests for .gitignore semantics.
+	// See: https://git-scm.com/docs/gitignore#_pattern_format
+
+	writeFile(t, ws, ".gitignore", `ignored`)
+
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g.Dir = ws
+	g.Stdin = &bytes.Buffer{}
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, g, 1)
+	touch(t, ws, "ignored/somefile.txt")
+	touch(t, ws, "lib/ignored")
+
+	time.Sleep(100 * time.Millisecond)
+	expectRunCount(t, ctx, g, 1)
+}
+
 func TestSendSIGINTToSleepCommandTerminates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -213,7 +256,6 @@ func TestSendSIGINTToSleepCommandTerminates(t *testing.T) {
 	}
 
 	g.Process.Signal(syscall.SIGINT)
-	t.Log("Sent SIGINT")
 
 	if err := WaitContext(ctx, g); err != nil && !isCleanExit(err) {
 		t.Fatal(err)

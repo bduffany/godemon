@@ -83,3 +83,7 @@ The default ignored patterns are listed in
 [default_ignore.go](https://github.com/bduffany/godemon/tree/master/default_ignore.go).
 
 To disable the default ignore list, pass `--no-default-ignore`.
+
+godemon also ignores patterns in the top-level `.gitignore` file of each
+watched directory by default. To disable this behavior, pass
+`--no-gitignore`.

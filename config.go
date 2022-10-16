@@ -43,5 +43,8 @@ type Config struct {
 
 	// Private fields below
 
-	notifySignal syscall.Signal
+	notifySignal   syscall.Signal
+	dryRun         bool
+	ignorePatterns []*pattern
+	onlyPatterns   []*pattern
 }
