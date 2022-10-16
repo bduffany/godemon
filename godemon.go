@@ -381,7 +381,7 @@ func (c *Cmd) Wait() error {
 					info = fmt.Sprintf(" (%s)", s.Signal())
 				}
 			}
-			notifyf("Command finished%s", info)
+			notifyf("Command finished%s. Waiting for changes...", info)
 		}
 	})
 	return c.waitErr
