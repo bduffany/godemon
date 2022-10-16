@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,42 +16,6 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/fsnotify/fsnotify"
 )
-
-const (
-	// DefaultNotifySignal is the default signal sent to a command on changes
-	// (in order to get it to restart).
-	DefaultNotifySignal = syscall.SIGTERM
-)
-
-func isDir(path string) bool {
-	s, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false
-	}
-	if err != nil {
-		warnf("%s", err)
-		return false
-	}
-	return s.IsDir()
-}
-
-func parseSignal(name string) (syscall.Signal, error) {
-	n, err := strconv.Atoi(name)
-	if err == nil {
-		return syscall.Signal(n), nil
-	}
-	switch strings.TrimPrefix(strings.ToUpper(name), "SIG") {
-	case "INT":
-		return syscall.SIGINT, nil
-	case "TERM":
-		return syscall.SIGTERM, nil
-	case "QUIT":
-		return syscall.SIGQUIT, nil
-	case "KILL":
-		return syscall.SIGKILL, nil
-	}
-	return 0, fmt.Errorf("unsupported signal %q", name)
-}
 
 func printUsage() {
 	fmt.Print(`
@@ -327,49 +290,6 @@ func parseGitignore(b []byte, path string) []*pattern {
 		patterns = append(patterns, p)
 	}
 	return patterns
-}
-
-func nonBlockingDrain(ch <-chan struct{}) int {
-	n := 0
-	for {
-		select {
-		case <-ch:
-			n++
-		default:
-			return n
-		}
-	}
-}
-
-func throttleRestarts(events <-chan struct{}) chan struct{} {
-	restart := make(chan struct{})
-	go func() {
-		defer close(restart)
-
-		for {
-			// Wait for first event since last restart
-			_, ok := <-events
-			if !ok {
-				return
-			}
-			// Restart immediately. The send here is non-blocking, so the receiver
-			// will ignore restart attempts while it is already mid-restart.
-			select {
-			case restart <- struct{}{}:
-			default:
-			}
-			// Make sure we go at least 50ms with no events before the next restart
-			// TODO: Make this configurable, and/or adaptive
-			for {
-				<-time.After(50 * time.Millisecond)
-				n := nonBlockingDrain(events)
-				if n == 0 {
-					break
-				}
-			}
-		}
-	}()
-	return restart
 }
 
 var (
