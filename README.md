@@ -32,7 +32,7 @@ The command line interface and config file format are not yet stable.
 The easiest way to install godemon is with the `go` CLI:
 
 ```bash
-go install github.com/bduffany/godemon@latest
+go install github.com/bduffany/godemon/cmd/godemon@latest
 ```
 
 ## Basic usage
