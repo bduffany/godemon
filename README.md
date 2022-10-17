@@ -20,6 +20,19 @@ It is great for:
 It is inspired by [nodemon](https://github.com/remy/nodemon) which
 is a similar tool written in JavaScript.
 
+## Goals
+
+- **Generic**: Does not give preference to any language or framework (even
+  Go). Can run arbitrary comands when changing arbitrary files.
+- **Configurable**: There is no "one size fits all" approach to file
+  watchers, so godemon gives you fine-grained control over the paths that
+  are included or ignored. For more advanced users, it also lets you
+  control which signals are used to restart your process, since different
+  processes respond differently to different signals.
+- **Strong defaults**: godemon ships with a default ignore list and also
+  treats your `.gitignore` files as additional ignore patterns. These
+  defaults can be turned off via config options.
+
 ## Status
 
 godemon has been tested on Mac and Linux. It has not yet been tested on
