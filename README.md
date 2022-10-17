@@ -7,6 +7,8 @@
 
 # godemon
 
+![go test](https://github.com/bduffany/godemon/actions/workflows/test.yaml/badge.svg)
+
 godemon is a tool that runs a command, monitors for changes to files,
 and restarts the command automatically whenever files change.
 
