@@ -1,4 +1,4 @@
-package main
+package godemon
 
 var defaultIgnorePatterns = []string{
 	// Log files

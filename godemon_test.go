@@ -1,6 +1,6 @@
 // Integration tests for the godemon CLI.
 // These tests invoke the built godemon binary.
-package main
+package godemon
 
 import (
 	"bytes"

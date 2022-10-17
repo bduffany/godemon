@@ -1,4 +1,5 @@
-package main
+// TODO: Split up this package
+package godemon
 
 import (
 	"fmt"
@@ -706,8 +707,6 @@ func Main(args []string) {
 	if err := g.Start(); err != nil {
 		fatalf("%s", err)
 	}
-}
 
-func main() {
-	Main(os.Args)
+	os.Exit(0)
 }
