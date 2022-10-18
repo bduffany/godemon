@@ -346,6 +346,10 @@ func newCommand(stdin *StdinRouter, cfg *Config) *Cmd {
 
 func (c *Cmd) Shutdown(s syscall.Signal) error {
 	c.willShutdown = true
+	return c.Signal(s)
+}
+
+func (c *Cmd) Signal(s syscall.Signal) error {
 	if err := c.Process.Signal(s); err != nil {
 		if err == os.ErrProcessDone {
 			debugf("Signal() failed: %s", err)
@@ -354,6 +358,7 @@ func (c *Cmd) Shutdown(s syscall.Signal) error {
 			// TODO: crash here?
 		}
 	}
+	debugf("Signaled command, now Wait()-ing for termination.")
 	err := c.Wait()
 	debugf("Wait() error: %s", err)
 	return nil
@@ -449,7 +454,12 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 			// can quickly respond to subsequent signals.
 			go func() {
 				debugf("Forwarding signal %d %q", s, s)
-				if err := cmd.Process.Signal(s); err != nil {
+				sys, ok := s.(syscall.Signal)
+				if !ok {
+					errorf("unsupported signal: %s", sys)
+					return
+				}
+				if err := cmd.Shutdown(sys); err != nil {
 					debugf("Failed to forward signal %s: %s", s, err)
 				}
 
@@ -485,7 +495,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 		notifyf("Restarting due to changes")
 		debugf("Sending notify signal: %s", g.cfg.notifySignal)
 
-		_ = current.Shutdown(g.cfg.notifySignal)
+		_ = current.Signal(g.cfg.notifySignal)
 
 		next := newCommand(stdin, g.cfg)
 		if err := next.Start(); err != nil {
