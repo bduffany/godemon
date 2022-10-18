@@ -194,6 +194,64 @@ func TestRestartOnEdit(t *testing.T) {
 	expectRunCount(t, ctx, g, 2)
 }
 
+func TestRestartSignalsAllChildren(t *testing.T) {
+	t.Skip() // TODO: make this pass on macOS
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	defer func() {
+		t.Logf("Test ran in %s", time.Since(start))
+	}()
+
+	// Run a Python program that becomes its own process group leader, so that
+	// if we signal the godemon child processs group, it won't be affected.
+	// Also
+	g := exec.CommandContext(ctx, binaryPath, "-w", "toplevel.go", "-vv", "bash", "-c", `
+		sh -c 'sleep 5' &
+		echo "bash: waiting for sh..."
+		wait
+		echo "bash: sh exited."
+	`)
+	g.Dir = newTestWorkspace(t)
+	// g.Stdout = os.Stdout
+	// g.Stderr = os.Stderr
+	g.Stdin = bytes.NewBuffer(nil)
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer g.Wait()
+	defer func() {
+		start := time.Now()
+		t.Log("Killing process tree...")
+		defer func() {
+			t.Logf("Killing process tree took %s", time.Since(start))
+		}()
+		KillProcessTree(g.Process.Pid)
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+
+	touch(t, g.Dir, "toplevel.go")
+
+	time.Sleep(500 * time.Millisecond)
+
+	snap, err := NewTreeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shCount := 0
+	for _, p := range snap.Processes {
+		if p.Executable() == "sh" {
+			shCount += 1
+		}
+	}
+	if shCount != 1 {
+		t.Errorf("error: expected 1 sh process, got %d", shCount)
+	}
+}
+
 func TestWatchSingleFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
