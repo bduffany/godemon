@@ -33,8 +33,8 @@ is a similar tool written in JavaScript.
   control which signals are used to restart your process, since different
   processes respond differently to different signals.
 - **Strong defaults**: godemon ships with a default ignore list and also
-  treats your `.gitignore` files as additional ignore patterns. These
-  defaults can be turned off via config options.
+  treats `.gitignore` files as additional ignore patterns. These defaults
+  can be turned off via config options.
 
 ## Status
 
@@ -100,6 +100,6 @@ The default ignored patterns are listed in
 
 To disable the default ignore list, pass `--no-default-ignore`.
 
-godemon also ignores patterns in the top-level `.gitignore` file of each
-watched directory by default. To disable this behavior, pass
-`--no-gitignore`.
+By default, godemon also ignores patterns that are listed in `.gitignore`
+files for any watched paths which are contained in a Git repository. To
+disable this behavior, pass `--no-gitignore`.

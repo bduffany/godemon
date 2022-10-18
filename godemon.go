@@ -2,6 +2,7 @@
 package godemon
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -243,35 +244,75 @@ func relativePatterns(exprs []string) []*pattern {
 	return out
 }
 
+func containingGitRepoPath(path string) (*string, error) {
+	for {
+		exists, err := exists(filepath.Join(path, ".git"))
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return &path, nil
+		}
+		// TODO: Guard against symlink cycle
+		parent := filepath.Dir(path)
+		if parent == path {
+			return nil, nil
+		}
+		path = parent
+	}
+}
+
 func addGitignorePatterns(cfg *Config, path string) error {
-	// TODO: Handle negation (!)
-	// TODO: Traverse upwards to find .git, rather than assuming we're in
-	// the repo root.
+	// TODO: Handle negation (!) patterns
 	if !isDir(path) {
 		return nil
 	}
-	dotGitExists, err := exists(filepath.Join(path, ".git"))
+	optRepoPath, err := containingGitRepoPath(path)
 	if err != nil {
 		return err
 	}
-	if !dotGitExists {
+	if optRepoPath == nil {
 		return nil
 	}
-	// TODO: Use `git ls-files` to find all .gitignore paths in the repo, and
-	// incorporate those too.
-	b, err := os.ReadFile(filepath.Join(path, ".gitignore"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+	repoPath := *optRepoPath
+	debugf("git repo path for %q: %q", path, repoPath)
+	ls := exec.Command("git", "ls-files", "--cached", "--modified", "--others")
+	ls.Dir = repoPath
+	stdout := bytes.NewBuffer(nil)
+	stderr := bytes.NewBuffer(nil)
+	ls.Stdout = stdout
+	ls.Stderr = stderr
+	if err := ls.Run(); err != nil {
+		return fmt.Errorf("failed to add .gitignore patterns: git ls-files failed: %q", stderr.String())
 	}
-	patterns := parseGitignore(b, path)
-	cfg.ignorePatterns = append(cfg.ignorePatterns, patterns...)
+	lsPaths := strings.Split(strings.TrimSpace(string(stdout.String())), "\n")
+	var gitignorePaths []string
+	for _, path := range lsPaths {
+		// TODO: Only append gitignore paths that are under a watched path
+		if path == ".gitignore" || strings.HasSuffix(path, "/.gitignore") {
+			gitignorePaths = append(gitignorePaths, path)
+		}
+	}
+	for _, gitignoreRelPath := range gitignorePaths {
+		// TODO: Use `git ls-files` to find all .gitignore paths in the repo, and
+		// incorporate those too.
+		gitignorePath := filepath.Join(repoPath, gitignoreRelPath)
+		b, err := os.ReadFile(gitignorePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		debugf("Reading .gitignore patterns from %s", gitignorePath)
+		debugf("Raw .gitignore contents: %s", string(b))
+		patterns := parseGitignore(b, filepath.Dir(gitignorePath))
+		cfg.ignorePatterns = append(cfg.ignorePatterns, patterns...)
+	}
 	return nil
 }
 
-func parseGitignore(b []byte, path string) []*pattern {
+func parseGitignore(b []byte, parentDirPath string) []*pattern {
 	var patterns []*pattern
 	lines := strings.Split(string(b), "\n")
 	for _, line := range lines {
@@ -287,7 +328,7 @@ func parseGitignore(b []byte, path string) []*pattern {
 			expr = expr + "/**"
 		}
 		p := &pattern{
-			Expr:     filepath.Join(path, expr),
+			Expr:     filepath.Join(parentDirPath, expr),
 			Absolute: true,
 		}
 		patterns = append(patterns, p)
@@ -568,7 +609,7 @@ func (g *godemon) shouldIgnore(path string) bool {
 		// TODO: Consider allowing ignore patterns to act as override flags to
 		// prevent earlier explicitly watched paths from actually being watched.
 		if w == path {
-			debugf("not ignoring explicitly watched path %s", path)
+			debugf("Not ignoring explicitly watched path %s", path)
 			return false
 		}
 		// TODO: Cache this syscall result?

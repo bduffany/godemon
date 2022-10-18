@@ -23,11 +23,15 @@ const (
 	// countRunsScript is a shell script that counts the number of times
 	// it was invoked, using the file ../count
 	countRunsScript = `
-		if ! [ -e ../count ]; then
-			echo 0 > ../count
-		fi
-		count=$(cat ../count)
-		echo $(( count + 1 )) > ../count
+		while ! [[ -e ./count ]]; do
+			cd ..
+			if [[ "$PWD" == "/" ]]; then
+				echo >&2 "Failed to find ./count file!"
+				exit 1
+			fi
+		done
+		count=$(cat ./count)
+		echo $(( count + 1 )) > ./count
 
 		sleep infinity
 `
@@ -82,11 +86,12 @@ func newTestWorkspace(t *testing.T) string {
 	// Layout of `root` looks like this:
 	// - godemon-test-abc123/  # `root`
 	//   - .                   # temp files go here, to avoid triggering godemon
+	//   - count               # keeps track of how many times countRunsScript was executed
 	//   - workspace/          # godemon working dir
 	//     -                   # `fnames` are written here
+	writeFile(t, root, "count", "0")
 	ws := filepath.Join(root, "workspace")
 	fnames := []string{
-		".git/config",
 		".gitignore",
 		"toplevel.go",
 		"lib/foo.go",
@@ -104,11 +109,22 @@ func newTestWorkspace(t *testing.T) string {
 		}
 		f.Close()
 	}
+	git := exec.Command("sh", "-c", `
+		git init
+		git add .gitignore
+		git commit -m "Initial commit with .gitignore"
+	`)
+	git.Dir = ws
+	b, err := git.CombinedOutput()
+	if err != nil {
+		t.Log(string(b))
+		t.Fatalf("failed to initialize git repository: %s", err)
+	}
 	return ws
 }
 
-func runCount(t *testing.T, godemon *exec.Cmd) int {
-	path := filepath.Join(godemon.Dir, "../count")
+func runCount(t *testing.T, ws string) int {
+	path := filepath.Join(ws, "../count")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return 0
@@ -124,7 +140,7 @@ func runCount(t *testing.T, godemon *exec.Cmd) int {
 	return count
 }
 
-func expectRunCount(t *testing.T, ctx context.Context, godemon *exec.Cmd, count int) {
+func expectRunCount(t *testing.T, ctx context.Context, ws string, count int) {
 	var c int
 	for {
 		select {
@@ -132,7 +148,7 @@ func expectRunCount(t *testing.T, ctx context.Context, godemon *exec.Cmd, count 
 			t.Fatalf("timed out waiting for run count to equal %d (last count: %d)", count, c)
 		default:
 		}
-		c = runCount(t, godemon)
+		c = runCount(t, ws)
 		// Count will never decrease, so fail early.
 		if c > count {
 			t.Fatalf("unexpected run count: ran %d times but expected %d", c, count)
@@ -168,30 +184,32 @@ func TestRestartOnCreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
+	ws := newTestWorkspace(t)
 	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
-	g.Dir = newTestWorkspace(t)
+	g.Dir = ws
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
 	}
-	expectRunCount(t, ctx, g, 1)
+	expectRunCount(t, ctx, ws, 1)
 	touch(t, g.Dir, "NEW.go")
 
-	expectRunCount(t, ctx, g, 2)
+	expectRunCount(t, ctx, ws, 2)
 }
 
 func TestRestartOnEdit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
+	ws := newTestWorkspace(t)
 	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
-	g.Dir = newTestWorkspace(t)
+	g.Dir = ws
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
 	}
-	expectRunCount(t, ctx, g, 1)
+	expectRunCount(t, ctx, ws, 1)
 	touch(t, g.Dir, "toplevel.go")
 
-	expectRunCount(t, ctx, g, 2)
+	expectRunCount(t, ctx, ws, 2)
 }
 
 func TestRestartSignalsAllChildren(t *testing.T) {
@@ -256,31 +274,33 @@ func TestWatchSingleFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
+	ws := newTestWorkspace(t)
 	g := exec.CommandContext(ctx, binaryPath, "-w", "./toplevel.go", "-vv", "bash", "-c", countRunsScript)
-	g.Dir = newTestWorkspace(t)
+	g.Dir = ws
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
 	}
-	expectRunCount(t, ctx, g, 1)
+	expectRunCount(t, ctx, ws, 1)
 	touch(t, g.Dir, "toplevel.go")
 
-	expectRunCount(t, ctx, g, 2)
+	expectRunCount(t, ctx, ws, 2)
 }
 
 func TestDefaultIgnoreList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
+	ws := newTestWorkspace(t)
 	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
-	g.Dir = newTestWorkspace(t)
+	g.Dir = ws
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
 	}
-	expectRunCount(t, ctx, g, 1)
+	expectRunCount(t, ctx, ws, 1)
 	touch(t, g.Dir, ".git/config")
 
 	time.Sleep(50 * time.Millisecond)
-	expectRunCount(t, ctx, g, 1)
+	expectRunCount(t, ctx, ws, 1)
 }
 
 func TestGitignore(t *testing.T) {
@@ -304,12 +324,64 @@ func TestGitignore(t *testing.T) {
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
 	}
-	expectRunCount(t, ctx, g, 1)
+	expectRunCount(t, ctx, ws, 1)
 	touch(t, ws, "ignored/somefile.txt")
 	touch(t, ws, "lib/ignored")
 
 	time.Sleep(100 * time.Millisecond)
-	expectRunCount(t, ctx, g, 1)
+	expectRunCount(t, ctx, ws, 1)
+}
+
+func TestGitignoreInParentDirectory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	err := os.Mkdir(filepath.Join(ws, "ignored"), 0755)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, ws, ".gitignore", `ignored`)
+
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g.Dir = filepath.Join(ws, "lib")
+	g.Stdin = &bytes.Buffer{}
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 1)
+	touch(t, ws, "lib/ignored")
+
+	time.Sleep(100 * time.Millisecond)
+	expectRunCount(t, ctx, ws, 1)
+}
+
+func TestGitignoreInChildDirectory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+
+	writeFile(t, ws, "lib/.gitignore", `ignored`)
+
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g.Dir = filepath.Join(ws, "lib")
+	g.Stdin = &bytes.Buffer{}
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 1)
+
+	touch(t, ws, "lib/ignored")
+
+	time.Sleep(75 * time.Millisecond)
+	expectRunCount(t, ctx, ws, 1)
+
+	touch(t, ws, "lib/nested/ignored")
+
+	time.Sleep(75 * time.Millisecond)
+	expectRunCount(t, ctx, ws, 1)
 }
 
 func TestSendSIGINTToSleepCommandTerminates(t *testing.T) {
