@@ -111,6 +111,8 @@ func newTestWorkspace(t *testing.T) string {
 	}
 	git := exec.Command("sh", "-c", `
 		git init
+		git config --local user.email "test@example.com"
+		git config --local user.name "Test"
 		git add .gitignore
 		git commit -m "Initial commit with .gitignore"
 	`)
@@ -436,7 +438,7 @@ func WaitContext(ctx context.Context, cmd *exec.Cmd) error {
 }
 
 func TestSendMultipleCtrlCToBadlyBehavedCommandTerminatesAfter3CtrlC(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	snap, err := NewTreeSnapshot()
@@ -463,7 +465,7 @@ func TestSendMultipleCtrlCToBadlyBehavedCommandTerminatesAfter3CtrlC(t *testing.
 	// Wait until the SIGINT trap is registered
 	t.Log("Waiting for SIGINT trap to be registered")
 	for !strings.Contains(buf.String(), "Listening for SIGINT") {
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			t.Fatalf("Timed out waiting for SIGINT listener to be registered")
