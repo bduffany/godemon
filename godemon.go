@@ -4,7 +4,6 @@ package godemon
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -369,8 +368,6 @@ func toAbsolutePattern(parent string, p *pattern) string {
 
 type Cmd struct {
 	*exec.Cmd
-	stdin     *StdinRouter
-	stdinPipe *io.PipeReader
 
 	willShutdown bool
 
@@ -378,11 +375,12 @@ type Cmd struct {
 	waitErr  error
 }
 
-func newCommand(stdin *StdinRouter, cfg *Config) *Cmd {
+func newCommand(cfg *Config) *Cmd {
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
+	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return &Cmd{Cmd: cmd, stdin: stdin}
+	return &Cmd{Cmd: cmd}
 }
 
 func (c *Cmd) Shutdown(s syscall.Signal) error {
@@ -406,8 +404,6 @@ func (c *Cmd) Signal(s syscall.Signal) error {
 }
 
 func (c *Cmd) Start() error {
-	c.stdinPipe = c.stdin.Reader()
-	c.Cmd.Stdin = c.stdinPipe
 	if err := c.Cmd.Start(); err != nil {
 		return err
 	}
@@ -420,7 +416,6 @@ func (c *Cmd) Wait() error {
 		debugf("c.Wait()")
 		s, err := c.Cmd.Process.Wait()
 		c.waitErr = err
-		c.stdinPipe.Close()
 		if !c.willShutdown {
 			info := ""
 			if s, ok := s.Sys().(syscall.WaitStatus); ok {
@@ -449,9 +444,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 	nShutdownAttempts := 0
 	var mu sync.Mutex
 
-	stdin := NewStdinRouter()
-
-	cmd := newCommand(stdin, g.cfg)
+	cmd := newCommand(g.cfg)
 	if err := cmd.Start(); err != nil {
 		fatalf("Could not start command: %s", err)
 	}
@@ -538,7 +531,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 
 		_ = current.Signal(g.cfg.notifySignal)
 
-		next := newCommand(stdin, g.cfg)
+		next := newCommand(g.cfg)
 		if err := next.Start(); err != nil {
 			fatalf("Could not start command: %s", err)
 		}

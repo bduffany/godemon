@@ -5,6 +5,7 @@ package godemon
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 var (
@@ -418,6 +421,45 @@ func TestSendSIGINTToSleepCommandTerminates(t *testing.T) {
 			t.Log(info)
 		}
 		t.Fail()
+	}
+}
+
+func TestStdioIsTTY(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "python3", "-c", `
+import sys
+
+values = [f.isatty() for f in (sys.stdin, sys.stdout, sys.stderr)]
+print('isatty: stdin={}, stdout={}, stderr={}'.format(*values))
+`)
+	g.Dir = newTestWorkspace(t)
+
+	ptmx, err := pty.Start(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := bytes.NewBuffer(nil)
+	go io.Copy(buf, ptmx)
+
+	for ctx.Err() == nil && !strings.Contains(buf.String(), "isatty:") {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(buf.String(), "\n")
+	ttyLine := ""
+	for _, line := range lines {
+		if strings.Contains(line, "isatty:") {
+			ttyLine = strings.TrimRight(line, "\r")
+			break
+		}
+	}
+
+	if ttyLine != "isatty: stdin=True, stdout=True, stderr=True" {
+		t.Fatalf("stdin, stdout, stderr should all be a tty; but child process reported %q", ttyLine)
 	}
 }
 
