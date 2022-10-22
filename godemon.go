@@ -543,6 +543,10 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 }
 
 func (g *godemon) Start() error {
+	if err := setMaxRLimit(); err != nil {
+		warnf("%s", err)
+	}
+
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
