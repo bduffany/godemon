@@ -385,7 +385,11 @@ func newCommand(cfg *Config) *Cmd {
 
 func (c *Cmd) Shutdown(s syscall.Signal) error {
 	c.willShutdown = true
-	return c.Signal(s)
+	c.Signal(s)
+	debugf("Shutdown: signaled command, now waiting for termination")
+	err := c.Wait()
+	debugf("Wait() error: %s", err)
+	return err
 }
 
 func (c *Cmd) Signal(s syscall.Signal) error {
@@ -397,9 +401,6 @@ func (c *Cmd) Signal(s syscall.Signal) error {
 			// TODO: crash here?
 		}
 	}
-	debugf("Signaled command, now Wait()-ing for termination.")
-	err := c.Wait()
-	debugf("Wait() error: %s", err)
 	return nil
 }
 
@@ -493,7 +494,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 					errorf("unsupported signal: %s", sys)
 					return
 				}
-				if err := cmd.Shutdown(sys); err != nil {
+				if err := cmd.Signal(sys); err != nil {
 					debugf("Failed to forward signal %s: %s", s, err)
 				}
 
@@ -529,7 +530,7 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 		notifyf("Restarting due to changes")
 		debugf("Sending notify signal: %s", g.cfg.notifySignal)
 
-		_ = current.Signal(g.cfg.notifySignal)
+		_ = current.Shutdown(g.cfg.notifySignal)
 
 		next := newCommand(g.cfg)
 		if err := next.Start(); err != nil {
@@ -620,7 +621,7 @@ func (g *godemon) shouldIgnore(path string) bool {
 		debugf("Ruled out %q as parent watch path", w)
 	}
 	if parent == "" {
-		errorf("Could not determine parent watch path of %q", path)
+		infof("Could not determine parent watch path of %q", path)
 		return true
 	}
 	debugf("parent watch path of %s: %s", path, parent)
@@ -644,8 +645,16 @@ func (g *godemon) shouldIgnore(path string) bool {
 	// If this is a dir, return whether any of the "--only" patterns might fall
 	// under the dir.
 
-	// TODO: Handle symlinks.
-	if isDir(path) {
+	stat, err := os.Stat(path)
+	if err != nil {
+		infof("failed to stat %s: %s", path, err)
+		return false
+	}
+	if !stat.IsDir() && !stat.Mode().IsRegular() {
+		debugf("not following symlink: %s", err)
+		return false
+	}
+	if stat.IsDir() {
 		// If path is /foo/bar and we are watching only /foo, and absolute watch
 		// patterns are /foo/**/*.go, Then /foo/bar should be watched because
 		// /foo/bar/ matches /foo/**/
