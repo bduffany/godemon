@@ -787,11 +787,13 @@ func waitForLockfileRemoval(path string) error {
 	go func() {
 		w, err := fsnotify.NewWatcher()
 		if err != nil {
-			warnf("Could not setup watcher on lockfile %q: %s", path, err)
+			debugf("Could not setup watcher on lockfile %q: %s", path, err)
+			return
 		}
 		defer w.Close()
 		if err := w.Add(path); err != nil {
-			warnf("Could not setup watcher on lockfile %q: %s", path, err)
+			debugf("Could not setup watcher on lockfile %q: %s", path, err)
+			return
 		}
 		select {
 		case <-done:
