@@ -543,3 +543,28 @@ func TestSendMultipleCtrlCToBadlyBehavedCommandTerminatesAfter3CtrlC(t *testing.
 		t.Fail()
 	}
 }
+
+func TestLockfile(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	lockPath := filepath.Join(ws, "../godemon.lock")
+
+	g := exec.CommandContext(ctx, binaryPath, "--lockfile="+lockPath, "-w", "./toplevel.go", "-vv", "bash", "-c", countRunsScript)
+	g.Dir = ws
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 1)
+	touch(t, ws, "../godemon.lock")
+	touch(t, g.Dir, "toplevel.go")
+
+	time.Sleep(25 * time.Millisecond)
+	expectRunCount(t, ctx, ws, 1)
+
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 2)
+}

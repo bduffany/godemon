@@ -57,6 +57,7 @@ func parseConfig(args []string) (*Config, error) {
 	noDefaultIgnore := false
 	noGitignore := false
 	signal := ""
+	lockfile := ""
 	dryRun := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -92,17 +93,29 @@ func parseConfig(args []string) (*Config, error) {
 			continue
 		}
 
-		for _, name := range []string{"-s", "--signal"} {
-			if arg == name {
-				i++
-				arg = args[i]
-				signal = arg
-				goto nextarg
-			}
-			if strings.HasPrefix(arg, name+"=") {
-				arg = strings.TrimPrefix(arg, name+"=")
-				signal = arg
-				goto nextarg
+		// Parse string flags
+		for _, spec := range []struct {
+			Short, Long string
+			Dest        *string
+		}{
+			{"-s", "--signal", &signal},
+			{"", "--lockfile", &lockfile},
+		} {
+			for _, name := range []string{spec.Short, spec.Long} {
+				if name == "" {
+					continue
+				}
+				if arg == name {
+					i++
+					arg = args[i]
+					*spec.Dest = arg
+					goto nextarg
+				}
+				if strings.HasPrefix(arg, name+"=") {
+					arg = strings.TrimPrefix(arg, name+"=")
+					*spec.Dest = arg
+					goto nextarg
+				}
 			}
 		}
 
@@ -198,6 +211,9 @@ func parseConfig(args []string) (*Config, error) {
 
 	if signal != "" {
 		cfg.NotifySignal = &signal
+	}
+	if lockfile != "" {
+		cfg.Lockfile = &lockfile
 	}
 	if cfg.NotifySignal == nil {
 		cfg.notifySignal = DefaultNotifySignal
@@ -740,15 +756,92 @@ func (g *godemon) handleEvents(addCh chan<- string, restartCh chan<- struct{}, s
 				continue
 			}
 			infof("Got event: %s %q", event.Op, event.Name)
+
+			if g.cfg.Lockfile != nil && *g.cfg.Lockfile != "" {
+				if err := waitForLockfileRemoval(*g.cfg.Lockfile); err != nil {
+					warnf("waitForLockfileRemoval failed: %s", err)
+				}
+			}
+
 			// When creating new dirs, add them to the watch list.
 			if event.Op == fsnotify.Create && isDir(event.Name) {
 				addCh <- event.Name
-			} else {
-				restartCh <- struct{}{}
 			}
+			restartCh <- struct{}{}
 		case <-shutdownCh:
+			debugf("handleEvents: got shutdown signal")
 			return
 		}
+	}
+}
+
+func waitForLockfileRemoval(path string) error {
+	debugf("Waiting for removal of lockfile %s", path)
+
+	done := make(chan struct{}, 1)
+	defer close(done)
+
+	check := make(chan struct{}, 1)
+
+	// Check for removal if we get a REMOVE event from the FS.
+	go func() {
+		w, err := fsnotify.NewWatcher()
+		if err != nil {
+			warnf("Could not setup watcher on lockfile %q: %s", path, err)
+		}
+		defer w.Close()
+		if err := w.Add(path); err != nil {
+			warnf("Could not setup watcher on lockfile %q: %s", path, err)
+		}
+		select {
+		case <-done:
+			return
+		case event := <-w.Events:
+			if event.Op == fsnotify.Remove {
+				debugf("Observed %s event for lockfile %s", event.Op, path)
+				select {
+				case check <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	// Also check for removal periodically, using exponential backoff.
+	go func() {
+		backoff := ExponentialBackoff(50*time.Millisecond, 1*time.Second, 2)
+		for {
+			select {
+			case <-done:
+				return
+			case <-backoff():
+				check <- struct{}{}
+				continue
+			}
+		}
+	}()
+
+	for {
+		ex, err := exists(path)
+		if err != nil {
+			return err
+		}
+		if !ex {
+			return nil
+		}
+		<-check
+	}
+}
+
+func ExponentialBackoff(start, max time.Duration, factor float64) func() <-chan time.Time {
+	dly := start
+	return func() <-chan time.Time {
+		ch := time.After(dly)
+		dly = time.Duration(float64(dly) * factor)
+		if dly > max {
+			dly = max
+		}
+		return ch
 	}
 }
 

@@ -39,6 +39,13 @@ type Config struct {
 	// well-behaved commands.
 	NotifySignal *string `json:"notifySignal,omitempty"`
 
+	// Lockfile specifies a path to a file which, if it exists, will cause
+	// file-based restarts to be paused until the file is removed. This can be
+	// used to temporarily pause godemon's file-watching behavior while running a
+	// batch of updates, then finally trigger a restart only once all the updates
+	// are complete.
+	Lockfile *string `json:"lockfile,omitempty"`
+
 	// TODO: FollowSymlinks
 
 	// Private fields below
