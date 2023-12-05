@@ -391,6 +391,8 @@ func toAbsolutePattern(parent string, p *pattern) string {
 type Cmd struct {
 	*exec.Cmd
 
+	cfg *Config
+
 	willShutdown bool
 
 	waitOnce sync.Once
@@ -402,7 +404,7 @@ func newCommand(cfg *Config) *Cmd {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return &Cmd{Cmd: cmd}
+	return &Cmd{Cmd: cmd, cfg: cfg}
 }
 
 func (c *Cmd) Shutdown(s syscall.Signal) error {
@@ -427,6 +429,10 @@ func (c *Cmd) Signal(s syscall.Signal) error {
 }
 
 func (c *Cmd) Start() error {
+	if c.cfg.Clear {
+		// Clear terminal before starting the command.
+		fmt.Fprint(os.Stderr, "\033[2J\033[H")
+	}
 	if err := c.Cmd.Start(); err != nil {
 		return err
 	}
@@ -467,10 +473,6 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 	nShutdownAttempts := 0
 	var mu sync.Mutex
 
-	if g.cfg.Clear {
-		// Clear terminal before starting the command.
-		fmt.Fprint(os.Stderr, "\033[2J\033[H")
-	}
 	cmd := newCommand(g.cfg)
 	if err := cmd.Start(); err != nil {
 		fatalf("Could not start command: %s", err)
