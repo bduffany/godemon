@@ -59,6 +59,7 @@ func parseConfig(args []string) (*Config, error) {
 	signal := ""
 	lockfile := ""
 	dryRun := false
+	clearTerminal := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if isParsingCommand {
@@ -90,6 +91,10 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		if arg == "-v" || arg == "-vv" || arg == "-vvv" || arg == "-vvvv" {
 			logLevel -= len(arg) - 1
+			continue
+		}
+		if arg == "--clear" {
+			clearTerminal = true
 			continue
 		}
 
@@ -161,6 +166,7 @@ func parseConfig(args []string) (*Config, error) {
 	cfg.Command = cmdArgs
 	cfg.Ignore = ignore
 	cfg.Only = only
+	cfg.Clear = clearTerminal
 	if cfg.Watch != nil && len(cfg.Watch) == 0 {
 		return nil, fmt.Errorf("watch list in config is empty")
 	}
@@ -461,6 +467,10 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 	nShutdownAttempts := 0
 	var mu sync.Mutex
 
+	if g.cfg.Clear {
+		// Clear terminal before starting the command.
+		fmt.Fprint(os.Stderr, "\033[2J\033[H")
+	}
 	cmd := newCommand(g.cfg)
 	if err := cmd.Start(); err != nil {
 		fatalf("Could not start command: %s", err)

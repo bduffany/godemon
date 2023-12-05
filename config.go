@@ -46,6 +46,13 @@ type Config struct {
 	// are complete.
 	Lockfile *string `json:"lockfile,omitempty"`
 
+	// Clear specifies whether to clear the terminal on each re-run.
+	//
+	// Note, this option is just for convenience. The same functionality can
+	// be achieved with the following command:
+	// godemon [ flags ... ] sh -c 'clear && exec {command}'
+	Clear bool `json:"clear,omitempty"`
+
 	// TODO: FollowSymlinks
 
 	// Private fields below
