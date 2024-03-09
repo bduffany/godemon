@@ -33,7 +33,7 @@ func logf(level, format string, args ...interface{}) {
 	if level != "NOTIFY" {
 		prefix += level + ": "
 	}
-	fmt.Printf(gray+prefix+format+reset+"\n", args...)
+	fmt.Fprintf(os.Stderr, gray+prefix+format+reset+"\n", args...)
 }
 
 func debugf(format string, args ...interface{}) {
