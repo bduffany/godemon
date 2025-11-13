@@ -411,8 +411,23 @@ func (c *Cmd) Shutdown(s syscall.Signal) error {
 	c.willShutdown = true
 	c.Signal(s)
 	debugf("Shutdown: signaled command, now waiting for termination")
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+	go func() {
+		delay := 500 * time.Millisecond
+		for {
+			select {
+			case <-time.After(delay):
+				debugf("Command is still running - signaling again (pid %d)", c.Process.Pid)
+				c.Signal(s)
+				delay *= 2
+			case <-doneCh:
+				return
+			}
+		}
+	}()
 	err := c.Wait()
-	debugf("Wait() error: %s", err)
+	debugf("Wait() error: %v", err)
 	return err
 }
 
