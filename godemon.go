@@ -35,6 +35,7 @@ Advanced options:
   --no-gitignore       disable adding patterns from .gitignore to ignore list
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
+  --print-changes      print change events to stdout without running a command
 `)
 }
 
@@ -95,6 +96,10 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		if arg == "--clear" {
 			clearTerminal = true
+			continue
+		}
+		if arg == "--print-changes" {
+			cfg.PrintChanges = true
 			continue
 		}
 
@@ -230,8 +235,14 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		cfg.notifySignal = s
 	}
-	if len(cfg.Command) == 0 {
-		return nil, fmt.Errorf("must specify a command to run")
+	if cfg.PrintChanges {
+		if len(cfg.Command) > 0 {
+			return nil, fmt.Errorf("--print-changes cannot be used with a command")
+		}
+	} else {
+		if len(cfg.Command) == 0 {
+			return nil, fmt.Errorf("must specify a command to run")
+		}
 	}
 	cfg.dryRun = dryRun
 
@@ -619,9 +630,6 @@ func (g *godemon) Start() error {
 
 	shutdownCh := make(chan struct{}, 1)
 
-	// Command worker
-	restart := throttleRestarts(events)
-
 	if g.cfg.dryRun {
 		// Allow 1s for file watchers to be set up.
 		// TODO: Wait till addCh settles instead.
@@ -629,10 +637,16 @@ func (g *godemon) Start() error {
 		notifyf("Exiting due to --dry-run flag.")
 	}
 
-	go g.loopCommand(restart, shutdownCh)
-
-	// Wait for events and dispatch to the appropriate handler.
-	g.handleEvents(addCh, events, shutdownCh)
+	if g.cfg.PrintChanges {
+		// In print-changes mode, just print events to stdout without running a command.
+		g.handlePrintChanges(addCh, shutdownCh)
+	} else {
+		// Command worker
+		restart := throttleRestarts(events)
+		go g.loopCommand(restart, shutdownCh)
+		// Wait for events and dispatch to the appropriate handler.
+		g.handleEvents(addCh, events, shutdownCh)
+	}
 
 	return nil
 }
@@ -797,6 +811,37 @@ func (g *godemon) handleEvents(addCh chan<- string, restartCh chan<- struct{}, s
 			restartCh <- struct{}{}
 		case <-shutdownCh:
 			debugf("handleEvents: got shutdown signal")
+			return
+		}
+	}
+}
+
+func (g *godemon) handlePrintChanges(addCh chan<- string, shutdownCh <-chan struct{}) {
+	sig := make(chan os.Signal, 4)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	go func() {
+		<-sig
+		os.Exit(0)
+	}()
+
+	for {
+		select {
+		case err := <-g.w.Errors:
+			warnf("%s", err)
+		case event := <-g.w.Events:
+			if g.shouldIgnore(event.Name) {
+				infof("Ignoring event: %s %q", event.Op, event.Name)
+				continue
+			}
+			// Print the change event to stdout
+			fmt.Printf("%s %s\n", event.Op, event.Name)
+			// When creating new dirs, add them to the watch list.
+			if event.Op == fsnotify.Create && isDir(event.Name) {
+				addCh <- event.Name
+			}
+		case <-shutdownCh:
+			debugf("handlePrintChanges: got shutdown signal")
 			return
 		}
 	}

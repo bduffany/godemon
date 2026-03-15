@@ -53,6 +53,10 @@ type Config struct {
 	// godemon [ flags ... ] sh -c 'clear && exec {command}'
 	Clear bool `json:"clear,omitempty"`
 
+	// PrintChanges specifies whether to print change events to stdout without
+	// running any command. When enabled, no command should be specified.
+	PrintChanges bool `json:"printChanges,omitempty"`
+
 	// TODO: FollowSymlinks
 
 	// Private fields below
