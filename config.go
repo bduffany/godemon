@@ -53,6 +53,13 @@ type Config struct {
 	// godemon [ flags ... ] sh -c 'clear && exec {command}'
 	Clear bool `json:"clear,omitempty"`
 
+	// Quiet specifies whether godemon should suppress its own output.
+	Quiet bool `json:"quiet,omitempty"`
+
+	// ExitOnSuccess specifies whether godemon should exit once the command
+	// finishes successfully with exit code 0.
+	ExitOnSuccess bool `json:"exitOnSuccess,omitempty"`
+
 	// PrintChanges specifies whether to print change events to stdout without
 	// running any command. When enabled, no command should be specified.
 	PrintChanges bool `json:"printChanges,omitempty"`

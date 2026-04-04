@@ -14,10 +14,28 @@ var (
 		"ERROR":   4,
 		"FATAL":   5,
 	}
-	logLevel = logLevels["NOTIFY"]
+	defaultLogLevel = logLevels["NOTIFY"]
+	logLevel        = defaultLogLevel
+	quietLogs       bool
 )
 
+func resetLogOptions() {
+	logLevel = defaultLogLevel
+	quietLogs = false
+}
+
+func setQuietLogs(v bool) {
+	quietLogs = v
+}
+
+func isQuiet() bool {
+	return quietLogs
+}
+
 func logf(level, format string, args ...interface{}) {
+	if quietLogs {
+		return
+	}
 	if logLevels[level] < logLevel {
 		return
 	}

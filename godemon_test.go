@@ -233,6 +233,84 @@ func TestWatchSingleFile(t *testing.T) {
 	expectRunCount(t, ctx, ws, 2)
 }
 
+func TestExitOnSuccessExitsWhenCommandSucceedsImmediately(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "--exit-on-success", "-vv", "sh", "-c", "exit 0")
+	g.Dir = newTestWorkspace(t)
+	buf := &bytes.Buffer{}
+	g.Stdout = buf
+	g.Stderr = buf
+
+	if err := g.Run(); err != nil {
+		t.Logf("Command logs:\n%s\n", buf.String())
+		t.Fatal(err)
+	}
+}
+
+func TestExitOnSuccessWaitsForSuccessfulRerun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	g := exec.CommandContext(ctx, binaryPath, "--exit-on-success", "-vv", "bash", "-c", `
+		if [[ -e ./success ]]; then
+			exit 0
+		fi
+		exit 1
+	`)
+	g.Dir = ws
+	buf := &bytes.Buffer{}
+	g.Stdout = buf
+	g.Stderr = buf
+
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if err := g.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Logf("Command logs:\n%s\n", buf.String())
+		t.Fatalf("godemon exited before the watched command succeeded: %s", err)
+	}
+
+	writeFile(t, ws, "success", "")
+
+	if err := WaitContext(ctx, g); err != nil {
+		t.Logf("Command logs:\n%s\n", buf.String())
+		t.Fatal(err)
+	}
+}
+
+func TestQuietSuppressesGodemonOutput(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "--quiet", "--exit-on-success", "sh", "-c", `
+		printf 'child-stdout'
+		printf 'child-stderr' >&2
+		exit 0
+	`)
+	g.Dir = newTestWorkspace(t)
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	g.Stdout = stdout
+	g.Stderr = stderr
+
+	if err := g.Run(); err != nil {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s\nerror: %s", stdout.String(), stderr.String(), err)
+	}
+
+	if got := stdout.String(); got != "child-stdout" {
+		t.Fatalf("stdout = %q, want %q", got, "child-stdout")
+	}
+	if got := stderr.String(); got != "child-stderr" {
+		t.Fatalf("stderr = %q, want %q", got, "child-stderr")
+	}
+}
+
 func TestDefaultIgnoreList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()

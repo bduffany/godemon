@@ -29,10 +29,12 @@ Basic options:
   -w, --watch          set files or dirs to watch (default ".")
   -o, --only           only restart when changed paths match these patterns
   -i, --ignore         do not restart if changed paths match these patterns
+  -q, --quiet          suppress godemon's own output
 
 Advanced options:
   --no-default-ignore  disable the default ignore list (version control dirs, etc.)
   --no-gitignore       disable adding patterns from .gitignore to ignore list
+  --exit-on-success    exit if the command finishes successfully (exit code 0)
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
   --print-changes      print change events to stdout without running a command
@@ -40,6 +42,7 @@ Advanced options:
 }
 
 func parseConfig(args []string) (*Config, error) {
+	resetLogOptions()
 	cfg := &Config{}
 
 	// Ignore arg0 (executable name)
@@ -82,6 +85,11 @@ func parseConfig(args []string) (*Config, error) {
 			noGitignore = true
 			continue
 		}
+		if arg == "-q" || arg == "--quiet" {
+			cfg.Quiet = true
+			setQuietLogs(true)
+			continue
+		}
 		if arg == "--verbose" {
 			logLevel--
 			continue
@@ -96,6 +104,10 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		if arg == "--clear" {
 			clearTerminal = true
+			continue
+		}
+		if arg == "--exit-on-success" {
+			cfg.ExitOnSuccess = true
 			continue
 		}
 		if arg == "--print-changes" {
@@ -408,6 +420,16 @@ type Cmd struct {
 
 	waitOnce sync.Once
 	waitErr  error
+	doneCh   chan waitResult
+}
+
+type waitResult struct {
+	state *os.ProcessState
+	err   error
+}
+
+func (r waitResult) succeeded() bool {
+	return r.state != nil && r.state.Success()
 }
 
 func newCommand(cfg *Config) *Cmd {
@@ -415,7 +437,11 @@ func newCommand(cfg *Config) *Cmd {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return &Cmd{Cmd: cmd, cfg: cfg}
+	return &Cmd{
+		Cmd:    cmd,
+		cfg:    cfg,
+		doneCh: make(chan waitResult, 1),
+	}
 }
 
 func (c *Cmd) Shutdown(s syscall.Signal) error {
@@ -455,7 +481,7 @@ func (c *Cmd) Signal(s syscall.Signal) error {
 }
 
 func (c *Cmd) Start() error {
-	if c.cfg.Clear {
+	if c.cfg.Clear && !isQuiet() {
 		// Clear terminal before starting the command.
 		fmt.Fprint(os.Stderr, "\033[2J\033[H")
 	}
@@ -471,6 +497,7 @@ func (c *Cmd) Wait() error {
 		debugf("c.Wait()")
 		s, err := c.Cmd.Process.Wait()
 		c.waitErr = err
+		c.doneCh <- waitResult{state: s, err: err}
 		if !c.willShutdown {
 			info := ""
 			if s, ok := s.Sys().(syscall.WaitStatus); ok {
@@ -559,7 +586,9 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 					} else {
 						debugf("Command exited")
 					}
-					fmt.Println()
+					if !isQuiet() {
+						fmt.Println()
+					}
 					os.Exit(2)
 				}
 				if isShutdown && n == 2 {
@@ -570,30 +599,42 @@ func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{
 		}
 	}()
 
-	for range restart {
-		mu.Lock()
-		current := cmd
-		// If shutting down, ignore restart attempts and just wait
-		// for the program to be terminated.
-		if nShutdownAttempts > 0 {
+	for {
+		select {
+		case result := <-cmd.doneCh:
+			if g.cfg.ExitOnSuccess && !cmd.willShutdown && result.succeeded() {
+				notifyf("Command finished successfully. Exiting due to --exit-on-success.")
+				os.Exit(0)
+			}
+		case _, ok := <-restart:
+			if !ok {
+				return
+			}
+
+			mu.Lock()
+			current := cmd
+			// If shutting down, ignore restart attempts and just wait
+			// for the program to be terminated.
+			if nShutdownAttempts > 0 {
+				mu.Unlock()
+				continue
+			}
 			mu.Unlock()
-			continue
+
+			notifyf("Restarting due to changes")
+			debugf("Sending notify signal: %s", g.cfg.notifySignal)
+
+			_ = current.Shutdown(g.cfg.notifySignal)
+
+			next := newCommand(g.cfg)
+			if err := next.Start(); err != nil {
+				fatalf("Could not start command: %s", err)
+			}
+
+			mu.Lock()
+			cmd = next
+			mu.Unlock()
 		}
-		mu.Unlock()
-
-		notifyf("Restarting due to changes")
-		debugf("Sending notify signal: %s", g.cfg.notifySignal)
-
-		_ = current.Shutdown(g.cfg.notifySignal)
-
-		next := newCommand(g.cfg)
-		if err := next.Start(); err != nil {
-			fatalf("Could not start command: %s", err)
-		}
-
-		mu.Lock()
-		cmd = next
-		mu.Unlock()
 	}
 }
 
@@ -834,8 +875,10 @@ func (g *godemon) handlePrintChanges(addCh chan<- string, shutdownCh <-chan stru
 				infof("Ignoring event: %s %q", event.Op, event.Name)
 				continue
 			}
-			// Print the change event to stdout
-			fmt.Printf("%s %s\n", event.Op, event.Name)
+			if !isQuiet() {
+				// Print the change event to stdout
+				fmt.Printf("%s %s\n", event.Op, event.Name)
+			}
 			// When creating new dirs, add them to the watch list.
 			if event.Op == fsnotify.Create && isDir(event.Name) {
 				addCh <- event.Name
@@ -922,12 +965,15 @@ func ExponentialBackoff(start, max time.Duration, factor float64) func() <-chan 
 func Main(args []string) {
 	cfg, err := parseConfig(args)
 	if err != nil {
-		fmt.Printf("%s: %s\n", os.Args[0], err)
-		fmt.Println("Try \"godemon --help\" for more information.")
+		if !isQuiet() {
+			fmt.Printf("%s: %s\n", os.Args[0], err)
+			fmt.Println("Try \"godemon --help\" for more information.")
+		}
 		os.Exit(1)
 	}
 
 	g := &godemon{cfg: cfg}
+	setQuietLogs(cfg.Quiet)
 	if err := g.Start(); err != nil {
 		fatalf("%s", err)
 	}

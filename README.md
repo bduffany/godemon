@@ -93,6 +93,20 @@ To ignore changes to certain paths or patterns, use `--ignore` or `-i`:
 godemon --ignore '**/build/**' --ignore '**/dist/**' command
 ```
 
+To suppress godemon's own log output while still allowing the watched command
+to write to stdout and stderr, use `--quiet` or `-q`:
+
+```bash
+godemon --quiet command
+```
+
+To have godemon exit once the watched command finally succeeds, use
+`--exit-on-success`:
+
+```bash
+godemon --exit-on-success command
+```
+
 ## Default ignored patterns
 
 The default ignored patterns are listed in
