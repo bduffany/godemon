@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -47,6 +48,25 @@ func init() {
 		panic(err)
 	}
 	binaryPath = filepath.Join(wd, "godemon")
+}
+
+// syncBuffer is a bytes.Buffer that is safe to read while a separate
+// goroutine (e.g. an os/exec output copier) is writing to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func isSignaledErr(err error) bool {
@@ -261,7 +281,7 @@ func TestExitOnSuccessWaitsForSuccessfulRerun(t *testing.T) {
 		exit 1
 	`)
 	g.Dir = ws
-	buf := &bytes.Buffer{}
+	buf := &syncBuffer{}
 	g.Stdout = buf
 	g.Stderr = buf
 
@@ -460,7 +480,7 @@ print('isatty: stdin={}, stdout={}, stderr={}'.format(*values))
 	if err != nil {
 		t.Fatal(err)
 	}
-	buf := bytes.NewBuffer(nil)
+	buf := &syncBuffer{}
 	go io.Copy(buf, ptmx)
 
 	for ctx.Err() == nil && !strings.Contains(buf.String(), "isatty:") {
@@ -516,7 +536,7 @@ func TestSendMultipleCtrlCToBadlyBehavedCommandTerminatesAfter3CtrlC(t *testing.
 		done
 	`)
 	g.Dir = newTestWorkspace(t)
-	buf := &bytes.Buffer{}
+	buf := &syncBuffer{}
 	g.Stderr = buf
 	g.Stdout = buf
 	g.Stdin = &bytes.Buffer{}
