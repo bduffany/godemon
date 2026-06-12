@@ -10,8 +10,8 @@
 ![go test](https://github.com/bduffany/godemon/actions/workflows/test.yaml/badge.svg)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](http://unlicense.org/)
 
-godemon is a tool that runs a command, monitors for changes to files,
-and restarts the command automatically whenever files change.
+godemon is a tool that immediately detects changes to watched files.
+It can do things based on the changes.
 
 It is great for:
 
@@ -37,10 +37,12 @@ is a similar tool written in JavaScript.
   `fsevents`) rather than polling for changes, so it doesn't use CPU
   resources when nothing is changing.
 - **Utility**: you can use godemon's file-watching capabilities in various
-  ways, not just running a command on every change. You can use it to
+  ways, beyond just running a command on every change. You can use it to
   stream the raw filesystem change events that it observes, to be consumed
   and processed by other programs, or to block a script until some
-  filesystem-related condition becomes true (e.g. file exists).
+  filesystem-related condition becomes true (e.g. file exists). You can
+  also use it as a Go library, to integrate file watching capabilities
+  into your Go library.
 
 ## Status
 
