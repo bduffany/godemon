@@ -27,20 +27,27 @@ func throttleRestarts(events <-chan struct{}) chan struct{} {
 			if !ok {
 				return
 			}
-			// Restart immediately. The send here is non-blocking, so the receiver
-			// will ignore restart attempts while it is already mid-restart.
-			select {
-			case restart <- struct{}{}:
-			default:
-			}
-			// Make sure we go at least 50ms with no events before the next restart
-			// TODO: Make this configurable, and/or adaptive
 			for {
-				<-time.After(50 * time.Millisecond)
-				n := nonBlockingDrain(events)
-				if n == 0 {
+				// Restart immediately. The send blocks while the receiver is
+				// mid-restart so that restart requests are never dropped.
+				restart <- struct{}{}
+				// Make sure we go at least 50ms with no events before the next
+				// restart.
+				// TODO: Make this configurable, and/or adaptive
+				pending := false
+				for {
+					<-time.After(50 * time.Millisecond)
+					if nonBlockingDrain(events) == 0 {
+						break
+					}
+					pending = true
+				}
+				if !pending {
 					break
 				}
+				// Events arrived during the cooldown, i.e. possibly after the
+				// command was restarted, so they may not be reflected in the
+				// current run: restart again to pick them up.
 			}
 		}
 	}()

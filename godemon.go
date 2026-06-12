@@ -515,7 +515,7 @@ func (c *Cmd) Wait() error {
 
 type godemon struct {
 	cfg *Config
-	w   *fsnotify.Watcher
+	w   watcher
 }
 
 func (g *godemon) loopCommand(restart <-chan struct{}, shutdownCh chan<- struct{}) {
@@ -643,7 +643,7 @@ func (g *godemon) Start() error {
 		warnf("%s", err)
 	}
 
-	w, err := fsnotify.NewWatcher()
+	w, err := newWatcher()
 	if err != nil {
 		return err
 	}
@@ -799,9 +799,17 @@ func (g *godemon) handleAdds(addCh chan string) {
 					infof("Not watching ignored path %q", path)
 					continue
 				}
-				g.w.Add(path)
+				if err := g.w.Add(path); err != nil {
+					warnf("Failed to watch %q: %s", path, err)
+					continue
+				}
 				infof("Watching %q", path)
 
+				if g.w.Recursive() {
+					// The watcher covers the whole tree rooted at this path;
+					// no need to watch each subdirectory individually.
+					continue
+				}
 				if !isDir(path) {
 					continue
 				}
@@ -830,14 +838,14 @@ func (g *godemon) handleAdds(addCh chan string) {
 func (g *godemon) handleEvents(addCh chan<- string, restartCh chan<- struct{}, shutdownCh <-chan struct{}) {
 	for {
 		select {
-		case err := <-g.w.Errors:
+		case err := <-g.w.Errors():
 			warnf("%s", err)
-		case event := <-g.w.Events:
-			if g.shouldIgnore(event.Name) {
-				infof("Ignoring event: %s %q", event.Op, event.Name)
+		case event := <-g.w.Events():
+			if g.shouldIgnore(event.Path) {
+				infof("Ignoring event: %s %q", event.Op, event.Path)
 				continue
 			}
-			infof("Got event: %s %q", event.Op, event.Name)
+			infof("Got event: %s %q", event.Op, event.Path)
 
 			if g.cfg.Lockfile != nil && *g.cfg.Lockfile != "" {
 				if err := waitForLockfileRemoval(*g.cfg.Lockfile); err != nil {
@@ -845,9 +853,10 @@ func (g *godemon) handleEvents(addCh chan<- string, restartCh chan<- struct{}, s
 				}
 			}
 
-			// When creating new dirs, add them to the watch list.
-			if event.Op == fsnotify.Create && isDir(event.Name) {
-				addCh <- event.Name
+			// When creating new dirs, add them to the watch list (recursive
+			// watchers cover newly created dirs automatically).
+			if !g.w.Recursive() && event.Op&opCreate != 0 && isDir(event.Path) {
+				addCh <- event.Path
 			}
 			restartCh <- struct{}{}
 		case <-shutdownCh:
@@ -868,20 +877,21 @@ func (g *godemon) handlePrintChanges(addCh chan<- string, shutdownCh <-chan stru
 
 	for {
 		select {
-		case err := <-g.w.Errors:
+		case err := <-g.w.Errors():
 			warnf("%s", err)
-		case event := <-g.w.Events:
-			if g.shouldIgnore(event.Name) {
-				infof("Ignoring event: %s %q", event.Op, event.Name)
+		case event := <-g.w.Events():
+			if g.shouldIgnore(event.Path) {
+				infof("Ignoring event: %s %q", event.Op, event.Path)
 				continue
 			}
 			if !isQuiet() {
 				// Print the change event to stdout
-				fmt.Printf("%s %s\n", event.Op, event.Name)
+				fmt.Printf("%s %s\n", event.Op, event.Path)
 			}
-			// When creating new dirs, add them to the watch list.
-			if event.Op == fsnotify.Create && isDir(event.Name) {
-				addCh <- event.Name
+			// When creating new dirs, add them to the watch list (recursive
+			// watchers cover newly created dirs automatically).
+			if !g.w.Recursive() && event.Op&opCreate != 0 && isDir(event.Path) {
+				addCh <- event.Path
 			}
 		case <-shutdownCh:
 			debugf("handlePrintChanges: got shutdown signal")

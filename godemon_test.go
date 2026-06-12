@@ -237,6 +237,33 @@ func TestRestartOnEdit(t *testing.T) {
 	expectRunCount(t, ctx, ws, 2)
 }
 
+func TestRestartOnChangeInNewlyCreatedNestedDir(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g.Dir = ws
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 1)
+
+	// Create dirs one level at a time so that each step triggers exactly one
+	// change event.
+	if err := os.Mkdir(filepath.Join(ws, "newdir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 2)
+	if err := os.Mkdir(filepath.Join(ws, "newdir/nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 3)
+
+	touch(t, ws, "newdir/nested/file.go")
+	expectRunCount(t, ctx, ws, 4)
+}
+
 func TestWatchSingleFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
