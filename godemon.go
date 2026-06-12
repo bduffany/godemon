@@ -38,7 +38,7 @@ Advanced options:
   --exit-on-success    exit if the command finishes successfully (exit code 0)
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
-  --print-changes      print change events to stdout without running a command
+  -p, --print-changes  print change events to stdout without running a command
 `)
 }
 
@@ -112,7 +112,7 @@ func parseConfig(args []string) (*Config, error) {
 			cfg.ExitOnSuccess = true
 			continue
 		}
-		if arg == "--print-changes" {
+		if arg == "-p" || arg == "--print-changes" {
 			cfg.PrintChanges = true
 			continue
 		}
