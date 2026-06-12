@@ -100,13 +100,6 @@ to write to stdout and stderr, use `--quiet` or `-q`:
 godemon --quiet command
 ```
 
-To have godemon exit once the watched command finally succeeds, use
-`--exit-on-success`:
-
-```bash
-godemon --exit-on-success command
-```
-
 ## Default ignored patterns
 
 The default ignored patterns are listed in
@@ -117,3 +110,30 @@ To disable the default ignore list, pass `--no-default-ignore`.
 By default, godemon also ignores patterns that are listed in `.gitignore`
 files for any watched paths which are contained in a Git repository. To
 disable this behavior, pass `--no-gitignore`.
+
+## Scripting
+
+In addition to using godemon at the command line, it can also be used in
+scripts as a generic file watcher utility.
+
+To have godemon exit once a watched command finally succeeds, use
+`--exit-on-success`. This is more responsive and efficient compared to a
+`while` loop that repeatedly runs the command.
+
+```bash
+godemon --exit-on-success command
+```
+
+To have godemon just print all changes on stdout, use `--print-changes`.
+This allows using `godemon`'s file watching capabilities directly:
+
+```bash
+godemon --print-changes
+# Example output:
+WRITE /tmp/foo
+CHMOD /tmp/foo
+CREATE /tmp/bar
+REMOVE /tmp/bar
+```
+
+Throttling is disabled when using `--print-changes`.
