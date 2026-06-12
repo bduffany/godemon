@@ -25,16 +25,21 @@ is a similar tool written in JavaScript.
 
 ## Goals
 
-- **Generic**: Does not give preference to any language or framework (even
-  Go). Can run arbitrary comands when changing arbitrary files.
-- **Configurable**: There is no "one size fits all" approach to file
-  watchers, so godemon gives you fine-grained control over the paths that
-  are included or ignored. For more advanced users, it also lets you
-  control which signals are used to restart your process, since different
-  processes respond differently to different signals.
 - **Strong defaults**: godemon ships with a default ignore list and also
-  treats `.gitignore` files as additional ignore patterns. These defaults
-  can be turned off via config options.
+  treats `.gitignore` files as additional ignore patterns. Restarts are
+  throttled to 50ms by default, so that rapid changes to a file don't
+  unnecessarily restart the command multiple times (this is common with
+  IDE format-on-save actions, for example).
+- **Configurability**: All of the opinionated defaults can be customized.
+- **Efficiency**: godemon is fast to start up and responds to file changes
+  immediately. It uses efficient file watching APIs (`inotify` and
+  `fsevents`) rather than polling for changes, so it doesn't use CPU
+  resources when nothing is changing.
+- **Utility**: you can use godemon's file-watching capabilities in various
+  ways, not just running a command on every change. You can use it to
+  stream the raw filesystem change events that it observes, to be consumed
+  and processed by other programs, or to block a script until some
+  filesystem-related condition becomes true (e.g. file exists).
 
 ## Status
 
