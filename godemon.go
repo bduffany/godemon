@@ -34,6 +34,7 @@ Basic options:
 Advanced options:
   --no-default-ignore  disable the default ignore list (version control dirs, etc.)
   --no-gitignore       disable adding patterns from .gitignore to ignore list
+  -t, --throttle       minimum quiet period before restarting again (default 50ms)
   --exit-on-success    exit if the command finishes successfully (exit code 0)
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
@@ -62,6 +63,7 @@ func parseConfig(args []string) (*Config, error) {
 	noGitignore := false
 	signal := ""
 	lockfile := ""
+	throttle := ""
 	dryRun := false
 	clearTerminal := false
 	for i := 0; i < len(args); i++ {
@@ -122,6 +124,7 @@ func parseConfig(args []string) (*Config, error) {
 		}{
 			{"-s", "--signal", &signal},
 			{"", "--lockfile", &lockfile},
+			{"-t", "--throttle", &throttle},
 		} {
 			for _, name := range []string{spec.Short, spec.Long} {
 				if name == "" {
@@ -237,6 +240,20 @@ func parseConfig(args []string) (*Config, error) {
 	}
 	if lockfile != "" {
 		cfg.Lockfile = &lockfile
+	}
+	if throttle != "" {
+		cfg.Throttle = &throttle
+	}
+	cfg.throttle = DefaultThrottle
+	if cfg.Throttle != nil {
+		d, err := time.ParseDuration(*cfg.Throttle)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --throttle duration %q: %w", *cfg.Throttle, err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("--throttle duration must not be negative")
+		}
+		cfg.throttle = d
 	}
 	if cfg.NotifySignal == nil {
 		cfg.notifySignal = DefaultNotifySignal
@@ -683,7 +700,7 @@ func (g *godemon) Start() error {
 		g.handlePrintChanges(addCh, shutdownCh)
 	} else {
 		// Command worker
-		restart := throttleRestarts(events)
+		restart := throttleRestarts(events, g.cfg.throttle)
 		go g.loopCommand(restart, shutdownCh)
 		// Wait for events and dispatch to the appropriate handler.
 		g.handleEvents(addCh, events, shutdownCh)

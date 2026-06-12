@@ -205,6 +205,39 @@ func writeFile(t *testing.T, ws string, fname string, content string) {
 	}
 }
 
+func TestParseThrottleFlag(t *testing.T) {
+	cfg, err := parseConfig([]string{"godemon", "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.throttle != DefaultThrottle {
+		t.Fatalf("throttle = %s, want default %s", cfg.throttle, DefaultThrottle)
+	}
+
+	cfg, err = parseConfig([]string{"godemon", "--throttle=200ms", "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.throttle != 200*time.Millisecond {
+		t.Fatalf("throttle = %s, want 200ms", cfg.throttle)
+	}
+
+	cfg, err = parseConfig([]string{"godemon", "-t", "200ms", "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.throttle != 200*time.Millisecond {
+		t.Fatalf("throttle = %s, want 200ms", cfg.throttle)
+	}
+
+	if _, err := parseConfig([]string{"godemon", "--throttle=bogus", "true"}); err == nil {
+		t.Fatal("expected error for invalid --throttle duration")
+	}
+	if _, err := parseConfig([]string{"godemon", "--throttle=-50ms", "true"}); err == nil {
+		t.Fatal("expected error for negative --throttle duration")
+	}
+}
+
 func TestRestartOnCreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()

@@ -4,6 +4,10 @@ import (
 	"time"
 )
 
+// DefaultThrottle is the default minimum quiet period observed after a
+// restart before restarting again.
+const DefaultThrottle = 50 * time.Millisecond
+
 func nonBlockingDrain(ch <-chan struct{}) int {
 	n := 0
 	for {
@@ -16,7 +20,7 @@ func nonBlockingDrain(ch <-chan struct{}) int {
 	}
 }
 
-func throttleRestarts(events <-chan struct{}) chan struct{} {
+func throttleRestarts(events <-chan struct{}, quiet time.Duration) chan struct{} {
 	restart := make(chan struct{})
 	go func() {
 		defer close(restart)
@@ -31,12 +35,12 @@ func throttleRestarts(events <-chan struct{}) chan struct{} {
 				// Restart immediately. The send blocks while the receiver is
 				// mid-restart so that restart requests are never dropped.
 				restart <- struct{}{}
-				// Make sure we go at least 50ms with no events before the next
-				// restart.
-				// TODO: Make this configurable, and/or adaptive
+				// Make sure we go at least the quiet period with no events
+				// before the next restart.
+				// TODO: Make this adaptive
 				pending := false
 				for {
-					<-time.After(50 * time.Millisecond)
+					<-time.After(quiet)
 					if nonBlockingDrain(events) == 0 {
 						break
 					}

@@ -2,6 +2,7 @@ package godemon
 
 import (
 	"syscall"
+	"time"
 )
 
 type Config struct {
@@ -39,6 +40,11 @@ type Config struct {
 	// well-behaved commands.
 	NotifySignal *string `json:"notifySignal,omitempty"`
 
+	// Throttle is the minimum quiet period observed after a restart before
+	// restarting again, as a Go duration string (e.g. "200ms", "1s").
+	// Defaults to "50ms".
+	Throttle *string `json:"throttle,omitempty"`
+
 	// Lockfile specifies a path to a file which, if it exists, will cause
 	// file-based restarts to be paused until the file is removed. This can be
 	// used to temporarily pause godemon's file-watching behavior while running a
@@ -69,6 +75,7 @@ type Config struct {
 	// Private fields below
 
 	notifySignal   syscall.Signal
+	throttle       time.Duration
 	dryRun         bool
 	ignorePatterns []*pattern
 	onlyPatterns   []*pattern
