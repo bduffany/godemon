@@ -30,7 +30,8 @@ is a similar tool written in JavaScript.
   throttled to 50ms by default, so that rapid changes to a file don't
   unnecessarily restart the command multiple times (this is common with
   IDE format-on-save actions, for example).
-- **Configurability**: All of the opinionated defaults can be customized.
+- **Configurability**: All of the opinionated behaviors and settings can
+  be customized.
 - **Efficiency**: godemon is fast to start up and responds to file changes
   immediately. It uses efficient file watching APIs (`inotify` and
   `fsevents`) rather than polling for changes, so it doesn't use CPU
