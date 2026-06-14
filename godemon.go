@@ -39,6 +39,7 @@ Advanced options:
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
   -p, --print-changes  print change events to stdout without running a command
+  --wait               wait for one change, then exit without running a command
 `)
 }
 
@@ -114,6 +115,10 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		if arg == "-p" || arg == "--print-changes" {
 			cfg.PrintChanges = true
+			continue
+		}
+		if arg == "--wait" {
+			cfg.Wait = true
 			continue
 		}
 
@@ -264,8 +269,11 @@ func parseConfig(args []string) (*Config, error) {
 		}
 		cfg.notifySignal = s
 	}
-	if cfg.PrintChanges {
+	if cfg.PrintChanges || cfg.Wait {
 		if len(cfg.Command) > 0 {
+			if cfg.Wait {
+				return nil, fmt.Errorf("--wait cannot be used with a command")
+			}
 			return nil, fmt.Errorf("--print-changes cannot be used with a command")
 		}
 	} else {
@@ -667,7 +675,9 @@ func (g *godemon) Start() error {
 	defer func() {
 		debugf("Removing file watchers")
 		w.Close()
-		select {} // Wait for shutdown to finish.
+		if !g.cfg.Wait {
+			select {} // Wait for shutdown to finish.
+		}
 	}()
 	g.w = w
 
@@ -695,7 +705,9 @@ func (g *godemon) Start() error {
 		notifyf("Exiting due to --dry-run flag.")
 	}
 
-	if g.cfg.PrintChanges {
+	if g.cfg.Wait {
+		g.waitForChange(addCh)
+	} else if g.cfg.PrintChanges {
 		// In print-changes mode, just print events to stdout without running a command.
 		g.handlePrintChanges(addCh, shutdownCh)
 	} else {
@@ -852,30 +864,36 @@ func (g *godemon) handleAdds(addCh chan string) {
 	}
 }
 
+func (g *godemon) handleChange(addCh chan<- string, event fsEvent) bool {
+	if g.shouldIgnore(event.Path) {
+		infof("Ignoring event: %s %q", event.Op, event.Path)
+		return false
+	}
+	infof("Got event: %s %q", event.Op, event.Path)
+
+	if g.cfg.Lockfile != nil && *g.cfg.Lockfile != "" {
+		if err := waitForLockfileRemoval(*g.cfg.Lockfile); err != nil {
+			warnf("waitForLockfileRemoval failed: %s", err)
+		}
+	}
+
+	// When creating new dirs, add them to the watch list (recursive watchers
+	// cover newly created dirs automatically).
+	if !g.w.Recursive() && event.Op&opCreate != 0 && isDir(event.Path) {
+		addCh <- event.Path
+	}
+	return true
+}
+
 func (g *godemon) handleEvents(addCh chan<- string, restartCh chan<- struct{}, shutdownCh <-chan struct{}) {
 	for {
 		select {
 		case err := <-g.w.Errors():
 			warnf("%s", err)
 		case event := <-g.w.Events():
-			if g.shouldIgnore(event.Path) {
-				infof("Ignoring event: %s %q", event.Op, event.Path)
-				continue
+			if g.handleChange(addCh, event) {
+				restartCh <- struct{}{}
 			}
-			infof("Got event: %s %q", event.Op, event.Path)
-
-			if g.cfg.Lockfile != nil && *g.cfg.Lockfile != "" {
-				if err := waitForLockfileRemoval(*g.cfg.Lockfile); err != nil {
-					warnf("waitForLockfileRemoval failed: %s", err)
-				}
-			}
-
-			// When creating new dirs, add them to the watch list (recursive
-			// watchers cover newly created dirs automatically).
-			if !g.w.Recursive() && event.Op&opCreate != 0 && isDir(event.Path) {
-				addCh <- event.Path
-			}
-			restartCh <- struct{}{}
 		case <-shutdownCh:
 			debugf("handleEvents: got shutdown signal")
 			return
@@ -897,22 +915,29 @@ func (g *godemon) handlePrintChanges(addCh chan<- string, shutdownCh <-chan stru
 		case err := <-g.w.Errors():
 			warnf("%s", err)
 		case event := <-g.w.Events():
-			if g.shouldIgnore(event.Path) {
-				infof("Ignoring event: %s %q", event.Op, event.Path)
-				continue
-			}
-			if !isQuiet() {
+			if g.handleChange(addCh, event) && !isQuiet() {
 				// Print the change event to stdout
 				fmt.Printf("%s %s\n", event.Op, event.Path)
-			}
-			// When creating new dirs, add them to the watch list (recursive
-			// watchers cover newly created dirs automatically).
-			if !g.w.Recursive() && event.Op&opCreate != 0 && isDir(event.Path) {
-				addCh <- event.Path
 			}
 		case <-shutdownCh:
 			debugf("handlePrintChanges: got shutdown signal")
 			return
+		}
+	}
+}
+
+func (g *godemon) waitForChange(addCh chan<- string) {
+	for {
+		select {
+		case err := <-g.w.Errors():
+			warnf("%s", err)
+		case event := <-g.w.Events():
+			if g.handleChange(addCh, event) {
+				if g.cfg.PrintChanges && !isQuiet() {
+					fmt.Printf("%s %s\n", event.Op, event.Path)
+				}
+				return
+			}
 		}
 	}
 }

@@ -70,6 +70,10 @@ type Config struct {
 	// running any command. When enabled, no command should be specified.
 	PrintChanges bool `json:"printChanges,omitempty"`
 
+	// Wait specifies whether to wait for a single change and then exit without
+	// running any command. When enabled, no command should be specified.
+	Wait bool `json:"wait,omitempty"`
+
 	// TODO: FollowSymlinks
 
 	// Private fields below

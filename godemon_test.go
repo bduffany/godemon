@@ -238,6 +238,41 @@ func TestParseThrottleFlag(t *testing.T) {
 	}
 }
 
+func TestWaitExitsOnWatchedChange(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, ws, "watched.go", "")
+
+	cfg, err := parseConfig([]string{"godemon", "--wait", "--watch", ws, "--only", "*.go", "--ignore", "ignored.go", "--no-gitignore"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- (&godemon{cfg: cfg}).Start()
+	}()
+
+	// An ignored change should leave wait mode running.
+	time.Sleep(500 * time.Millisecond)
+	writeFile(t, ws, "ignored.go", "")
+	select {
+	case err := <-done:
+		t.Fatalf("wait exited on ignored change: %s", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	// A watched change should make wait mode return successfully.
+	writeFile(t, ws, "watched.go", "changed")
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for watched change")
+	}
+}
+
 func TestRestartOnCreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
