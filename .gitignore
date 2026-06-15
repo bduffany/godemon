@@ -1,3 +1,5 @@
 # Built binary
 /godemon
 
+# Discovered Go dependencies
+/.godeps
