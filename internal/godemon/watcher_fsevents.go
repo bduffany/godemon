@@ -4,9 +4,11 @@ package godemon
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsevents"
@@ -35,6 +37,7 @@ func (w *fseventsWatcher) Add(path string) error {
 	// FSEvents reports symlink-resolved paths (e.g. /private/var/... for
 	// /var/...), so watch the resolved path and map event paths back to the
 	// path as given.
+	addedAt := time.Now()
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return fmt.Errorf("resolve watch path %q: %w", path, err)
@@ -53,11 +56,11 @@ func (w *fseventsWatcher) Add(path string) error {
 	w.mu.Lock()
 	w.streams = append(w.streams, es)
 	w.mu.Unlock()
-	go w.translate(es, resolved, path)
+	go w.translate(es, resolved, path, addedAt)
 	return nil
 }
 
-func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPath string) {
+func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPath string, addedAt time.Time) {
 	for batch := range es.Events {
 		for _, e := range batch {
 			if e.Flags&(fsevents.MustScanSubDirs|fsevents.KernelDropped|fsevents.UserDropped|fsevents.RootChanged) != 0 {
@@ -67,15 +70,22 @@ func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPat
 				w.events <- FSEvent{Path: watchPath, Op: OpWrite}
 				continue
 			}
-			op := toFsOp(e.Flags)
-			if op == 0 {
-				continue
-			}
 			path := e.Path
 			// Event paths are absolute since the stream is not created
 			// relative to a device, but the leading "/" is not guaranteed.
 			if !strings.HasPrefix(path, "/") {
 				path = "/" + path
+			}
+			flags := e.Flags
+			if flags&fsevents.ItemCreated != 0 && createdBefore(path, addedAt) {
+				// FSEvents can report already-existing paths as created
+				// shortly after starting the stream. Treat only that create
+				// bit as startup noise and keep any other change flags.
+				flags &^= fsevents.ItemCreated
+			}
+			op := toFsOp(flags)
+			if op == 0 {
+				continue
 			}
 			if path == resolved {
 				path = watchPath
@@ -85,6 +95,22 @@ func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPat
 			w.events <- FSEvent{Path: path, Op: op}
 		}
 	}
+}
+
+func createdBefore(path string, t time.Time) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	if stat.Birthtimespec.Sec == 0 && stat.Birthtimespec.Nsec == 0 {
+		return false
+	}
+	birthTime := time.Unix(stat.Birthtimespec.Sec, stat.Birthtimespec.Nsec)
+	return !birthTime.After(t)
 }
 
 func toFsOp(flags fsevents.EventFlags) FSOp {
