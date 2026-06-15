@@ -18,13 +18,13 @@ import (
 // descriptor per watched directory.
 func newWatcher() (watcher, error) {
 	return &fseventsWatcher{
-		events: make(chan fsEvent, 1024),
+		events: make(chan FSEvent, 1024),
 		errors: make(chan error, 1),
 	}, nil
 }
 
 type fseventsWatcher struct {
-	events chan fsEvent
+	events chan FSEvent
 	errors chan error
 
 	mu      sync.Mutex
@@ -64,7 +64,7 @@ func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPat
 				// Events were coalesced or dropped, or the watch root itself
 				// changed. Report a change at the watch root so the command
 				// still restarts.
-				w.events <- fsEvent{Path: watchPath, Op: opWrite}
+				w.events <- FSEvent{Path: watchPath, Op: OpWrite}
 				continue
 			}
 			op := toFsOp(e.Flags)
@@ -82,32 +82,32 @@ func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPat
 			} else if strings.HasPrefix(path, resolved+"/") {
 				path = watchPath + strings.TrimPrefix(path, resolved)
 			}
-			w.events <- fsEvent{Path: path, Op: op}
+			w.events <- FSEvent{Path: path, Op: op}
 		}
 	}
 }
 
-func toFsOp(flags fsevents.EventFlags) fsOp {
-	var op fsOp
+func toFsOp(flags fsevents.EventFlags) FSOp {
+	var op FSOp
 	if flags&fsevents.ItemCreated != 0 {
-		op |= opCreate
+		op |= OpCreate
 	}
 	if flags&(fsevents.ItemModified|fsevents.ItemInodeMetaMod) != 0 {
-		op |= opWrite
+		op |= OpWrite
 	}
 	if flags&fsevents.ItemRemoved != 0 {
-		op |= opRemove
+		op |= OpRemove
 	}
 	if flags&fsevents.ItemRenamed != 0 {
-		op |= opRename
+		op |= OpRename
 	}
 	if flags&(fsevents.ItemChangeOwner|fsevents.ItemXattrMod|fsevents.ItemFinderInfoMod) != 0 {
-		op |= opChmod
+		op |= OpChmod
 	}
 	return op
 }
 
-func (w *fseventsWatcher) Events() <-chan fsEvent { return w.events }
+func (w *fseventsWatcher) Events() <-chan FSEvent { return w.events }
 
 func (w *fseventsWatcher) Errors() <-chan error { return w.errors }
 

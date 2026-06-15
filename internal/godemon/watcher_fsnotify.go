@@ -16,7 +16,7 @@ func newWatcher() (watcher, error) {
 	}
 	fw := &fsnotifyWatcher{
 		w:      w,
-		events: make(chan fsEvent, 1024),
+		events: make(chan FSEvent, 1024),
 	}
 	go fw.translate()
 	return fw, nil
@@ -24,33 +24,33 @@ func newWatcher() (watcher, error) {
 
 type fsnotifyWatcher struct {
 	w      *fsnotify.Watcher
-	events chan fsEvent
+	events chan FSEvent
 }
 
 func (w *fsnotifyWatcher) translate() {
 	defer close(w.events)
 	for e := range w.w.Events {
-		var op fsOp
+		var op FSOp
 		if e.Op&fsnotify.Create != 0 {
-			op |= opCreate
+			op |= OpCreate
 		}
 		if e.Op&fsnotify.Write != 0 {
-			op |= opWrite
+			op |= OpWrite
 		}
 		if e.Op&fsnotify.Remove != 0 {
-			op |= opRemove
+			op |= OpRemove
 		}
 		if e.Op&fsnotify.Rename != 0 {
-			op |= opRename
+			op |= OpRename
 		}
 		if e.Op&fsnotify.Chmod != 0 {
-			op |= opChmod
+			op |= OpChmod
 		}
-		w.events <- fsEvent{Path: e.Name, Op: op}
+		w.events <- FSEvent{Path: e.Name, Op: op}
 	}
 }
 
-func (w *fsnotifyWatcher) Events() <-chan fsEvent { return w.events }
+func (w *fsnotifyWatcher) Events() <-chan FSEvent { return w.events }
 
 func (w *fsnotifyWatcher) Errors() <-chan error { return w.w.Errors }
 

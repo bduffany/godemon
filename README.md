@@ -10,14 +10,13 @@
 ![go test](https://github.com/bduffany/godemon/actions/workflows/test.yaml/badge.svg)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](http://unlicense.org/)
 
-godemon is a tool that immediately detects changes to watched files.
-It can do things based on the changes.
+godemon detects changes to your files.
+It can do things based on the changes:
 
-It is great for:
-
-- Restarting a development server whenever you change source code
-- Running tests whenever you change source code
-- Mirroring a directory to another location, using a tool like `rsync`
+- Restart a development server or tests
+- Copy or upload the changes automatically, via `rsync`
+- Print the changes that are happening
+- Sleep until some file exists or is changed
 - Lots of other things!
 
 It is inspired by [nodemon](https://github.com/remy/nodemon) which
