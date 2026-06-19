@@ -15,7 +15,7 @@ godemon is both a CLI tool and Go library that detects changes to files and dire
 It can do things based on the changes:
 
 - Restart a development server or tests
-- Copy or upload the changes automatically, via `rsync`
+- Copy or upload changed contents automatically, via `rsync`
 - Print the changes that are happening
 - Sleep until some file exists or is changed
 - Lots of other things!
