@@ -10,7 +10,7 @@
 ![go test](https://github.com/bduffany/godemon/actions/workflows/test.yaml/badge.svg)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](http://unlicense.org/)
 
-godemon detects changes to files and directories.
+godemon is both a CLI tool and Go library that detects changes to files and directories.
 
 It can do things based on the changes:
 
