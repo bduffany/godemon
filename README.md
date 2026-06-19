@@ -10,7 +10,8 @@
 ![go test](https://github.com/bduffany/godemon/actions/workflows/test.yaml/badge.svg)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](http://unlicense.org/)
 
-godemon detects changes to your files.
+godemon detects changes to files and directories.
+
 It can do things based on the changes:
 
 - Restart a development server or tests
