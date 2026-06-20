@@ -144,6 +144,4 @@ CREATE /tmp/bar
 REMOVE /tmp/bar
 ```
 
-Throttling is disabled by default when using `--print-changes`.
-To re-enable it, you can use `--throttle` or `-t`, which accepts
-duration values such as `50ms` or `1s`.
+Throttling is disabled when using `--print-changes`.
