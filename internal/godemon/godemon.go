@@ -34,7 +34,7 @@ Basic options:
 Advanced options:
   --no-default-ignore  disable the default ignore list (version control dirs, etc.)
   --no-gitignore       disable adding patterns from .gitignore to ignore list
-  -t, --throttle       minimum quiet period before restarting again (default 50ms)
+  -t, --throttle       ignore changes for this duration after restart (default 50ms)
   --exit-on-success    exit if the command finishes successfully (exit code 0)
   -s, --signal         restart signal name or number (default SIGINT)
   -v, --verbose        log more info; set twice to log lower level debug info
@@ -206,7 +206,14 @@ func parseConfig(args []string) (*Config, error) {
 		cfg.Lockfile = &lockfile
 	}
 	if throttle != "" {
-		cfg.Throttle = &throttle
+		d, err := time.ParseDuration(throttle)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --throttle duration %q: %w", throttle, err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("--throttle duration must not be negative")
+		}
+		cfg.Throttle = &d
 	}
 	if err := cfg.prepare(); err != nil {
 		return nil, err
@@ -273,14 +280,10 @@ func (cfg *Config) prepare() error {
 
 	cfg.throttle = DefaultThrottle
 	if cfg.Throttle != nil {
-		d, err := time.ParseDuration(*cfg.Throttle)
-		if err != nil {
-			return fmt.Errorf("invalid --throttle duration %q: %w", *cfg.Throttle, err)
-		}
-		if d < 0 {
+		if *cfg.Throttle < 0 {
 			return fmt.Errorf("--throttle duration must not be negative")
 		}
-		cfg.throttle = d
+		cfg.throttle = *cfg.Throttle
 	}
 	if cfg.NotifySignal == nil {
 		cfg.notifySignal = DefaultNotifySignal

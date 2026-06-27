@@ -40,10 +40,9 @@ type Config struct {
 	// well-behaved commands.
 	NotifySignal *string `json:"notifySignal,omitempty"`
 
-	// Throttle is the minimum quiet period observed after a restart before
-	// restarting again, as a Go duration string (e.g. "200ms", "1s").
-	// Defaults to "50ms".
-	Throttle *string `json:"throttle,omitempty"`
+	// Throttle is the period after a restart during which additional filesystem
+	// changes are ignored. Defaults to DefaultThrottle.
+	Throttle *time.Duration `json:"throttle,omitempty"`
 
 	// Lockfile specifies a path to a file which, if it exists, will cause
 	// file-based restarts to be paused until the file is removed. This can be
