@@ -269,6 +269,16 @@ func TestWatchNextReturnsWatchedChange(t *testing.T) {
 	}
 }
 
+func TestGodemonVerboseEnv(t *testing.T) {
+	t.Setenv("GODEMON_VERBOSE", "1")
+	if _, err := parseConfig([]string{"godemon", "true"}); err != nil {
+		t.Fatal(err)
+	}
+	if logLevel != defaultLogLevel-1 {
+		t.Fatalf("logLevel = %d, want %d", logLevel, defaultLogLevel-1)
+	}
+}
+
 func TestParseThrottleFlag(t *testing.T) {
 	cfg, err := parseConfig([]string{"godemon", "true"})
 	if err != nil {

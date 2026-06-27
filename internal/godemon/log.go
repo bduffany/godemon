@@ -21,6 +21,9 @@ var (
 
 func resetLogOptions() {
 	logLevel = defaultLogLevel
+	if os.Getenv("GODEMON_VERBOSE") == "1" {
+		logLevel--
+	}
 	quietLogs = false
 }
 
