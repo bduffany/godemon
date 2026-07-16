@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -18,15 +20,13 @@ func parseSignal(name string) (syscall.Signal, error) {
 	if err == nil {
 		return syscall.Signal(n), nil
 	}
-	switch strings.TrimPrefix(strings.ToUpper(name), "SIG") {
-	case "INT":
-		return syscall.SIGINT, nil
-	case "TERM":
-		return syscall.SIGTERM, nil
-	case "QUIT":
-		return syscall.SIGQUIT, nil
-	case "KILL":
-		return syscall.SIGKILL, nil
+
+	signalName := strings.ToUpper(name)
+	if !strings.HasPrefix(signalName, "SIG") {
+		signalName = "SIG" + signalName
+	}
+	if signal := unix.SignalNum(signalName); signal != 0 {
+		return signal, nil
 	}
 	return 0, fmt.Errorf("unsupported signal %q", name)
 }
