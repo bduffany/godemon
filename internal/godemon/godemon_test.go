@@ -384,7 +384,7 @@ func TestRestartOnChangeInNewlyCreatedNestedDir(t *testing.T) {
 	defer cancel()
 
 	ws := newTestWorkspace(t)
-	g := exec.CommandContext(ctx, binaryPath, "-vv", "bash", "-c", countRunsScript)
+	g := exec.CommandContext(ctx, binaryPath, "--throttle=0", "-vv", "bash", "-c", countRunsScript)
 	g.Dir = ws
 	if err := g.Start(); err != nil {
 		t.Fatal(err)
