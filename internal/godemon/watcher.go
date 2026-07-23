@@ -47,6 +47,8 @@ type FSEvent struct {
 	Path string
 	// Op describes the kind of change observed for Path.
 	Op FSOp
+	// isDir reports whether Path is or was a directory when the event occurred.
+	isDir bool
 }
 
 // watcher delivers file change notifications for watched paths. The

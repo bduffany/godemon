@@ -890,21 +890,26 @@ func (g *godemon) handleChange(addCh chan<- string, event FSEvent) bool {
 		infof("Ignoring event: %s %q", event.Op, event.Path)
 		return false
 	}
+
+	// When creating new dirs, add them to the watch list (recursive watchers
+	// cover newly created dirs automatically).
+	if !g.w.Recursive() && event.Op&OpCreate != 0 && event.isDir {
+		select {
+		case addCh <- event.Path:
+		default:
+			warnf("Too many files being added at once; some paths may not be watched.")
+		}
+	}
+
+	if *g.cfg.UseDefaultIgnoreList && isDefaultIgnoredDirectory(event.Path, event.isDir) {
+		infof("Ignoring event on default ignored directory: %s %q", event.Op, event.Path)
+		return false
+	}
 	infof("Got event: %s %q", event.Op, event.Path)
 
 	if g.cfg.Lockfile != nil && *g.cfg.Lockfile != "" {
 		if err := waitForLockfileRemoval(*g.cfg.Lockfile); err != nil {
 			warnf("waitForLockfileRemoval failed: %s", err)
-		}
-	}
-
-	// When creating new dirs, add them to the watch list (recursive watchers
-	// cover newly created dirs automatically).
-	if !g.w.Recursive() && event.Op&OpCreate != 0 && isDir(event.Path) {
-		select {
-		case addCh <- event.Path:
-		default:
-			warnf("Too many files being added at once; some paths may not be watched.")
 		}
 	}
 	return true

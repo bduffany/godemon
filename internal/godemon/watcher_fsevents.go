@@ -67,7 +67,7 @@ func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPat
 				// Events were coalesced or dropped, or the watch root itself
 				// changed. Report a change at the watch root so the command
 				// still restarts.
-				w.events <- FSEvent{Path: watchPath, Op: OpWrite}
+				w.events <- FSEvent{Path: watchPath, Op: OpWrite, isDir: true}
 				continue
 			}
 			path := e.Path
@@ -92,7 +92,7 @@ func (w *fseventsWatcher) translate(es *fsevents.EventStream, resolved, watchPat
 			} else if strings.HasPrefix(path, resolved+"/") {
 				path = watchPath + strings.TrimPrefix(path, resolved)
 			}
-			w.events <- FSEvent{Path: path, Op: op}
+			w.events <- FSEvent{Path: path, Op: op, isDir: flags&fsevents.ItemIsDir != 0}
 		}
 	}
 }

@@ -541,6 +541,83 @@ func TestDefaultIgnoreList(t *testing.T) {
 	expectRunCount(t, ctx, ws, 1)
 }
 
+func TestDefaultIgnoreList_IgnoresLeafDirectoryEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	g := exec.CommandContext(ctx, binaryPath, "--throttle=0", "-vv", "bash", "-c", countRunsScript)
+	g.Dir = ws
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 1)
+
+	// Codex briefly creates and removes empty metadata directories. Their own
+	// directory events should not restart the command.
+	for _, name := range []string{".agents", ".codex"} {
+		path := filepath.Join(ws, name)
+		for range 20 {
+			if err := os.Mkdir(path, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+		expectRunCount(t, ctx, ws, 1)
+	}
+
+	// A regular file with a metadata directory name should not be ignored.
+	touch(t, ws, ".agents")
+	expectRunCount(t, ctx, ws, 2)
+}
+
+func TestDefaultIgnoreList_DoesNotIgnoreDirectoryContents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	for _, name := range []string{".agents", ".codex"} {
+		if err := os.Mkdir(filepath.Join(ws, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	g := exec.CommandContext(ctx, binaryPath, "--throttle=0", "-vv", "bash", "-c", countRunsScript)
+	g.Dir = ws
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 1)
+
+	// Files beneath the metadata directories are ordinary watched paths.
+	touch(t, ws, ".agents/config.json")
+	expectRunCount(t, ctx, ws, 2)
+	touch(t, ws, ".codex/config.toml")
+	expectRunCount(t, ctx, ws, 3)
+}
+
+func TestNoDefaultIgnoreList_DoesNotIgnoreDirectoryEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	ws := newTestWorkspace(t)
+	g := exec.CommandContext(ctx, binaryPath, "--no-default-ignore", "--throttle=0", "-vv", "bash", "-c", countRunsScript)
+	g.Dir = ws
+	if err := g.Start(); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 1)
+
+	// Disabling default ignores restores ordinary events for metadata dirs.
+	if err := os.Mkdir(filepath.Join(ws, ".agents"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	expectRunCount(t, ctx, ws, 2)
+}
+
 func TestGitignore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
