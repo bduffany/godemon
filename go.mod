@@ -8,6 +8,7 @@ require (
 	github.com/fsnotify/fsevents v0.2.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/mitchellh/go-ps v1.0.0
+	golang.org/x/term v0.43.0
 )
 
 require golang.org/x/sys v0.46.0

@@ -518,7 +518,7 @@ func (c *Cmd) Signal(s syscall.Signal) error {
 }
 
 func (c *Cmd) Start() error {
-	if c.cfg.Clear && !isQuiet() {
+	if c.cfg.Clear && !isQuiet() && stderrIsTerminal() {
 		// Clear terminal before starting the command.
 		fmt.Fprint(os.Stderr, "\033[2J\033[H")
 	}

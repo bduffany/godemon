@@ -500,6 +500,30 @@ func TestQuietSuppressesGodemonOutput(t *testing.T) {
 	}
 }
 
+func TestGodemonDoesNotEmitANSIWhenOutputIsNotTTY(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	g := exec.CommandContext(ctx, binaryPath, "--clear", "-vv", "--exit-on-success", "sh", "-c", "exit 0")
+	g.Dir = newTestWorkspace(t)
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	g.Stdout = stdout
+	g.Stderr = stderr
+
+	if err := g.Run(); err != nil {
+		t.Fatalf("stdout:\n%s\nstderr:\n%s\nerror: %s", stdout.String(), stderr.String(), err)
+	}
+
+	if strings.Contains(stdout.String(), "\x1b") {
+		t.Fatalf("stdout contains ANSI escape bytes: %q", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "\x1b") {
+		t.Fatalf("stderr contains ANSI escape bytes: %q", stderr.String())
+	}
+}
+
 func TestDefaultIgnoreList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()

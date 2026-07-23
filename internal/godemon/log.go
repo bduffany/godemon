@@ -42,9 +42,6 @@ func logf(level, format string, args ...interface{}) {
 	if logLevels[level] < logLevel {
 		return
 	}
-	// TODO: Disable colors if not writing to terminal
-	const gray = "\x1b[90m"
-	const reset = "\x1b[0m"
 	prefix, ok := os.LookupEnv("GODEMON_LOG_PREFIX")
 	if !ok {
 		prefix = "[godemon] "
@@ -54,7 +51,13 @@ func logf(level, format string, args ...interface{}) {
 	if level != "NOTIFY" {
 		prefix += level + ": "
 	}
-	fmt.Fprintf(os.Stderr, gray+prefix+format+reset+"\n", args...)
+	if stderrIsTerminal() {
+		const gray = "\x1b[90m"
+		const reset = "\x1b[0m"
+		fmt.Fprintf(os.Stderr, gray+prefix+format+reset+"\n", args...)
+		return
+	}
+	fmt.Fprintf(os.Stderr, prefix+format+"\n", args...)
 }
 
 func debugf(format string, args ...interface{}) {
