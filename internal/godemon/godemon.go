@@ -357,6 +357,24 @@ func addGitignorePatterns(cfg *Config, path string) error {
 	}
 	repoPath := *optRepoPath
 	debugf("git repo path for %q: %q", path, repoPath)
+
+	globalExcludesPath, err := gitConfigPath(repoPath, "core.excludesFile")
+	if err != nil {
+		debugf("Could not determine global Git excludes file: %s", err)
+	} else if globalExcludesPath != "" {
+		if err := addGitignoreFilePatterns(cfg, globalExcludesPath, repoPath); err != nil {
+			return err
+		}
+	}
+	infoExcludesPath, err := gitPath(repoPath, "info/exclude")
+	if err != nil {
+		debugf("Could not determine repository Git excludes file: %s", err)
+	} else {
+		if err := addGitignoreFilePatterns(cfg, infoExcludesPath, repoPath); err != nil {
+			return err
+		}
+	}
+
 	ls := exec.Command("git", "ls-files", "--cached", "--modified", "--others")
 	ls.Dir = repoPath
 	stdout := bytes.NewBuffer(nil)
@@ -375,21 +393,53 @@ func addGitignorePatterns(cfg *Config, path string) error {
 		}
 	}
 	for _, gitignoreRelPath := range gitignorePaths {
-		// TODO: Use `git ls-files` to find all .gitignore paths in the repo, and
-		// incorporate those too.
 		gitignorePath := filepath.Join(repoPath, gitignoreRelPath)
-		b, err := os.ReadFile(gitignorePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
+		if err := addGitignoreFilePatterns(cfg, gitignorePath, filepath.Dir(gitignorePath)); err != nil {
 			return err
 		}
-		debugf("Reading .gitignore patterns from %s", gitignorePath)
-		debugf("Raw .gitignore contents: %s", string(b))
-		patterns := parseGitignore(b, filepath.Dir(gitignorePath))
-		cfg.ignorePatterns = append(cfg.ignorePatterns, patterns...)
 	}
+	return nil
+}
+
+func gitConfigPath(repoPath, key string) (string, error) {
+	cmd := exec.Command("git", "config", "--path", "--get", key)
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return "", nil
+		}
+		return "", fmt.Errorf("git config --get %s failed: %w", key, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitPath(repoPath, path string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--git-path", path)
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --git-path %s failed: %w", path, err)
+	}
+	gitPath := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitPath) {
+		gitPath = filepath.Join(repoPath, gitPath)
+	}
+	return gitPath, nil
+}
+
+func addGitignoreFilePatterns(cfg *Config, path, parentDirPath string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	debugf("Reading git ignore patterns from %s", path)
+	debugf("Raw git ignore contents: %s", string(b))
+	patterns := parseGitignore(b, parentDirPath)
+	cfg.ignorePatterns = append(cfg.ignorePatterns, patterns...)
 	return nil
 }
 
