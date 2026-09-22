@@ -699,6 +699,33 @@ func TestGitignoreInChildDirectory(t *testing.T) {
 	expectRunCount(t, ctx, ws, 1)
 }
 
+func TestGlobalGitignore(t *testing.T) {
+	root := t.TempDir()
+	globalIgnorePath := filepath.Join(root, "global-ignore")
+	writeFile(t, root, "global-ignore", "tags\n")
+
+	globalConfigPath := filepath.Join(root, "global-gitconfig")
+	config := exec.Command("git", "config", "--file", globalConfigPath, "core.excludesFile", globalIgnorePath)
+	if out, err := config.CombinedOutput(); err != nil {
+		t.Fatalf("configure global excludes file: %s: %s", err, out)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfigPath)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	ws := newTestWorkspace(t)
+	cfg, err := parseConfig([]string{"godemon", "--watch", ws, "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &godemon{cfg: cfg}
+	if !g.shouldIgnore(filepath.Join(ws, "tags")) {
+		t.Fatal("global core.excludesFile pattern did not ignore tags")
+	}
+	if g.shouldIgnore(filepath.Join(ws, "watched.go")) {
+		t.Fatal("global core.excludesFile ignored an unrelated path")
+	}
+}
+
 func TestSendSIGINTToSleepCommandTerminates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
